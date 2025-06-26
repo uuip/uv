@@ -9,6 +9,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{DistExtension, SourceDistExtension};
+use uv_distribution_types::Index;
 use uv_fs::Simplified;
 use uv_git_types::GitReference;
 use uv_normalize::PackageName;
@@ -25,6 +26,7 @@ pub struct RequirementsTxtExport<'lock> {
     nodes: Vec<ExportableRequirement<'lock>>,
     hashes: bool,
     editable: EditableMode,
+    indexes: &'lock [Index],
 }
 
 impl<'lock> RequirementsTxtExport<'lock> {
@@ -37,6 +39,7 @@ impl<'lock> RequirementsTxtExport<'lock> {
         editable: EditableMode,
         hashes: bool,
         install_options: &'lock InstallOptions,
+        indexes: &'lock [Index],
     ) -> Result<Self, LockError> {
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
@@ -57,12 +60,24 @@ impl<'lock> RequirementsTxtExport<'lock> {
             nodes,
             hashes,
             editable,
+            indexes,
         })
     }
 }
 
 impl std::fmt::Display for RequirementsTxtExport<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Write out index configurations first
+        for index in self.indexes {
+            let flag = if index.default { "--index-url" } else { "--extra-index-url" };
+            writeln!(f, "{flag} {}", index.url())?;
+        }
+
+        // Add blank line after index configuration if any indexes were written
+        if !self.indexes.is_empty() {
+            writeln!(f)?;
+        }
+
         // Write out each package.
         for ExportableRequirement {
             package,
