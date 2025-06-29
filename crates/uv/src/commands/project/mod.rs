@@ -769,7 +769,7 @@ pub(crate) enum EnvironmentIncompatibilityError {
     RequiresPython(EnvironmentKind, RequiresPython),
 
     #[error(
-        "The interpreter in the {0} environment has different version ({1}) than it was created with ({2})"
+        "The interpreter in the {0} environment has a different version ({1}) than it was created with ({2})"
     )]
     PyenvVersionConflict(EnvironmentKind, Version, Version),
 }
@@ -785,8 +785,8 @@ fn environment_is_usable(
     if let Some((cfg_version, int_version)) = environment.get_pyvenv_version_conflict() {
         return Err(EnvironmentIncompatibilityError::PyenvVersionConflict(
             kind,
-            cfg_version,
             int_version,
+            cfg_version,
         ));
     }
 
@@ -1746,6 +1746,7 @@ impl<'lock> EnvironmentSpecification<'lock> {
 pub(crate) async fn resolve_environment(
     spec: EnvironmentSpecification<'_>,
     interpreter: &Interpreter,
+    build_constraints: Constraints,
     settings: &ResolverSettings,
     network_settings: &NetworkSettings,
     state: &PlatformState,
@@ -1842,7 +1843,6 @@ pub(crate) async fn resolve_environment(
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
     let hasher = HashStrategy::default();
-    let build_constraints = Constraints::default();
     let build_hasher = HashStrategy::default();
 
     // When resolving from an interpreter, we assume an empty environment, so reinstalls and

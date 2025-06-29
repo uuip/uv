@@ -1344,7 +1344,7 @@ fn run_with_build_constraints() -> Result<()> {
     })?;
 
     // Installing requests with incompatible build constraints should fail.
-    uv_snapshot!(context.filters(), context.run().arg("--with").arg("requests==1.2").arg("main.py"), @r###"
+    uv_snapshot!(context.filters(), context.run().arg("--with").arg("requests==1.2").arg("main.py"), @r"
     success: false
     exit_code: 1
     ----- stdout -----
@@ -1358,12 +1358,11 @@ fn run_with_build_constraints() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
      + typing-extensions==4.10.0
-    Resolved 1 package in [TIME]
       × Failed to download and build `requests==1.2.0`
       ├─▶ Failed to resolve requirements from `setup.py` build
       ├─▶ No solution found when resolving: `setuptools>=40.8.0`
       ╰─▶ Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
-    "###);
+    ");
 
     // Change the build constraint to be compatible with `requests==1.2`.
     pyproject_toml.write_str(indoc! { r#"
@@ -4685,6 +4684,22 @@ fn run_groups_requires_python() -> Result<()> {
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
+
+    // TMP: Attempt to catch this flake with verbose output
+    // See https://github.com/astral-sh/uv/issues/14160
+    let output = context
+        .run()
+        .arg("python")
+        .arg("-c")
+        .arg("import typing_extensions")
+        .arg("-vv")
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Removed virtual environment"),
+        "{}",
+        stderr
+    );
 
     // Going back to just "dev" we shouldn't churn the venv needlessly
     uv_snapshot!(context.filters(), context.run()
