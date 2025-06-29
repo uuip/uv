@@ -1,0 +1,57 @@
+name: Sync Tags
+on:
+  schedule:
+    - cron: '10 */12 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      synced_tags: ${{ steps.sync_tags.outputs.synced_tags }}
+      has_new_tags: ${{ steps.sync_tags.outputs.has_new_tags }}
+      latest_tag: ${{ steps.sync_tags.outputs.latest_tag }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.PAT_TOKEN }}
+    - id: sync_tags
+      run: |
+        git config user.name github-actions[bot]
+        git remote add upstream https://github.com/astral-sh/uv.git
+
+        fork_tags=$(git tag -l | sort)
+        git fetch upstream --tags -q
+
+        missing=$(comm -23 \
+          <(git ls-remote --tags upstream | awk -F/ '{print $3}' | grep -v '{}$' | sort) \
+          <(echo "$fork_tags"))
+
+        if [ -z "$missing" ]; then
+          echo "No new tags"
+          echo "has_new_tags=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        echo "Found: $(echo $missing | wc -w) tags"
+        echo "$missing" | xargs -I{} git push origin refs/tags/{}:refs/tags/{}
+        echo "✅ Synced: $missing"
+
+        # Get the latest tag for release workflow
+        latest_tag=$(echo "$missing" | tr ' ' '\n' | sort -V | tail -n1)
+        echo "synced_tags<<EOF" >> $GITHUB_OUTPUT
+        echo "$missing" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "has_new_tags=true" >> $GITHUB_OUTPUT
+        echo "latest_tag<<EOF" >> $GITHUB_OUTPUT
+        echo "$latest_tag" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+  trigger-release:
+    needs: sync
+    if: needs.sync.outputs.has_new_tags == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.sync.outputs.latest_tag }}
+    secrets: inherit
