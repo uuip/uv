@@ -4570,7 +4570,7 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.7.15"
+version = "0.7.16"
 dependencies = [
  "anstream",
  "anyhow",
@@ -4584,7 +4584,6 @@ dependencies = [
  "ctrlc",
  "dotenvy",
  "dunce",
- "etcetera",
  "filetime",
  "flate2",
  "fs-err 3.1.1",
@@ -4735,7 +4734,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.7.15"
+version = "0.7.16"
 dependencies = [
  "anyhow",
  "uv-build-backend",
@@ -4798,6 +4797,7 @@ dependencies = [
  "tokio",
  "toml_edit",
  "tracing",
+ "uv-cache-key",
  "uv-configuration",
  "uv-distribution",
  "uv-distribution-types",
@@ -5923,7 +5923,7 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.7.15"
+version = "0.7.16"
 
 [[package]]
 name = "uv-virtualenv"
@@ -5977,6 +5977,7 @@ dependencies = [
  "uv-build-backend",
  "uv-cache-key",
  "uv-configuration",
+ "uv-dirs",
  "uv-distribution-types",
  "uv-fs",
  "uv-git-types",

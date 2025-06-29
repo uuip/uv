@@ -1,6 +1,7 @@
 //! Resolve the current [`ProjectWorkspace`] or [`Workspace`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -568,6 +569,27 @@ impl Workspace {
             Some(workspace.install_path.join(path))
         }
 
+        /// Generate cache directory path for centralized venv management.
+        fn cache_venv_path(workspace: &Workspace) -> PathBuf {
+            let project_name = workspace.packages().keys().next()
+                .map(|name| name.as_dist_info_name().into_owned())
+                .unwrap_or_else(|| {
+                    workspace.install_path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("project")
+                        .to_string()
+                });
+            
+            let mut hasher = DefaultHasher::new();
+            workspace.install_path.hash(&mut hasher);
+            let hash = format!("{:08x}", hasher.finish());
+            
+            uv_dirs::user_cache_dir()
+                .unwrap_or_else(|| PathBuf::from(".cache").join("uv"))
+                .join("virtualenvs")
+                .join(format!("{project_name}-{hash}"))
+        }
+
         /// Resolve the `VIRTUAL_ENV` variable, if any.
         fn from_virtual_env_variable() -> Option<PathBuf> {
             let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
@@ -587,8 +609,18 @@ impl Workspace {
         }
 
         // Determine the default value
-        let project_env = from_project_environment_variable(self)
-            .unwrap_or_else(|| self.install_path.join(".venv"));
+        let project_env = from_project_environment_variable(self).unwrap_or_else(|| {
+            let venv_in_project = std::env::var(EnvVars::UV_VENV_IN_PROJECT)
+                .map(|v| v != "false")
+                .unwrap_or(true);
+            
+            if venv_in_project {
+                self.install_path.join(".venv")
+            } else {
+                let project_venv = self.install_path.join(".venv");
+                if project_venv.exists() { project_venv } else { cache_venv_path(self) }
+            }
+        });
 
         // Warn if it conflicts with `VIRTUAL_ENV`
         if let Some(from_virtual_env) = from_virtual_env_variable() {

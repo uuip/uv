@@ -256,6 +256,12 @@ impl EnvVars {
     /// for more details.
     pub const UV_PROJECT_ENVIRONMENT: &'static str = "UV_PROJECT_ENVIRONMENT";
 
+    /// Control where virtual environments are created.
+    /// 
+    /// Default: true (create .venv in project directory, ignore cache-dir)
+    /// If set to false: use cache-dir/virtualenvs or project-dir/.venv if it already exists.
+    pub const UV_VENV_IN_PROJECT: &'static str = "UV_VENV_IN_PROJECT";
+
     /// Specifies the directory to place links to installed, managed Python executables.
     pub const UV_PYTHON_BIN_DIR: &'static str = "UV_PYTHON_BIN_DIR";
 
@@ -358,10 +364,6 @@ impl EnvVars {
     /// Used to force showing the derivation tree during resolver error reporting.
     #[attr_hidden]
     pub const UV_INTERNAL__SHOW_DERIVATION_TREE: &'static str = "UV_INTERNAL__SHOW_DERIVATION_TREE";
-
-    /// Used to set a temporary directory for some tests.
-    #[attr_hidden]
-    pub const UV_INTERNAL__TEST_DIR: &'static str = "UV_INTERNAL__TEST_DIR";
 
     /// Path to system-level configuration directory on Unix systems.
     pub const XDG_CONFIG_DIRS: &'static str = "XDG_CONFIG_DIRS";
