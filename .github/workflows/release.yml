@@ -22,10 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('refs/tags/{0}', inputs.tag) || github.ref }}
       - uses: taiki-e/create-gh-release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
   upload-binaries:
     needs: create-release
@@ -43,10 +45,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('refs/tags/{0}', inputs.tag) || github.ref }}
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: uv,uvx
           target: ${{ matrix.target }}
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && format('refs/tags/{0}', inputs.tag) || github.ref }}
           archive: uv-$target
           token: ${{ secrets.GITHUB_TOKEN }}
