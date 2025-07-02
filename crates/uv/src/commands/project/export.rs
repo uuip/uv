@@ -212,6 +212,9 @@ pub(crate) async fn export(
     // Validate that the set of requested extras and development groups are compatible.
     detect_conflicts(&lock, &extras, &groups)?;
 
+    // Get effective indexes (project-level overrides workspace-level)
+    let effective_indexes = get_effective_indexes(&target);
+
     // Identify the installation target.
     let target = match &target {
         ExportTarget::Project(VirtualProject::Project(project)) => {
@@ -315,6 +318,7 @@ pub(crate) async fn export(
                 editable,
                 hashes,
                 &install_options,
+                effective_indexes,
             )?;
 
             if include_header {
@@ -404,4 +408,20 @@ fn cmd() -> String {
         .flatten()
         .join(" ");
     format!("uv {args}")
+}
+
+/// Get effective indexes with project-level indexes overriding workspace-level indexes
+fn get_effective_indexes(target: &ExportTarget) -> &[uv_distribution_types::Index] {
+    match target {
+        ExportTarget::Project(VirtualProject::Project(project)) => {
+            project.current_project().pyproject_toml()
+                .tool.as_ref().and_then(|t| t.uv.as_ref())
+                .and_then(|uv| uv.index.as_ref())
+                .filter(|idx| !idx.is_empty())
+                .map(Vec::as_slice)
+                .unwrap_or_else(|| project.workspace().indexes())
+        }
+        ExportTarget::Project(VirtualProject::NonProject(workspace)) => workspace.indexes(),
+        ExportTarget::Script(_) => &[],
+    }
 }
