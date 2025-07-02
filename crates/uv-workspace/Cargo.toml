@@ -19,6 +19,7 @@ workspace = true
 uv-build-backend = { workspace = true, features = ["schemars"] }
 uv-cache-key = { workspace = true }
 uv-configuration = { workspace = true }
+uv-dirs = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-fs = { workspace = true, features = ["tokio", "schemars"] }
 uv-git-types = { workspace = true }

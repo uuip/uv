@@ -256,6 +256,12 @@ impl EnvVars {
     /// for more details.
     pub const UV_PROJECT_ENVIRONMENT: &'static str = "UV_PROJECT_ENVIRONMENT";
 
+    /// Control where virtual environments are created.
+    /// 
+    /// Default: true (create .venv in project directory, ignore cache-dir)
+    /// If set to false: use cache-dir/virtualenvs or project-dir/.venv if it already exists.
+    pub const UV_VENV_IN_PROJECT: &'static str = "UV_VENV_IN_PROJECT";
+
     /// Specifies the directory to place links to installed, managed Python executables.
     pub const UV_PYTHON_BIN_DIR: &'static str = "UV_PYTHON_BIN_DIR";
 

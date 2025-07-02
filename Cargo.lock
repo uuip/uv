@@ -6011,6 +6011,7 @@ dependencies = [
  "uv-build-backend",
  "uv-cache-key",
  "uv-configuration",
+ "uv-dirs",
  "uv-distribution-types",
  "uv-fs",
  "uv-git-types",
