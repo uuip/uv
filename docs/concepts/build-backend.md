@@ -2,9 +2,8 @@
 
 !!! note
 
-    The uv build backend is currently in preview and may change without warning.
-
-    When preview mode is not enabled, uv uses [hatchling](https://pypi.org/project/hatchling/) as the default build backend.
+    Currently, the default build backend for `uv init` is
+    [hatchling](https://pypi.org/project/hatchling/). This will change to `uv` in a future version.
 
 A build backend transforms a source tree (i.e., a directory) into a source distribution or a wheel.
 
@@ -12,19 +11,32 @@ uv supports all build backends (as specified by [PEP 517](https://peps.python.or
 also provides a native build backend (`uv_build`) that integrates tightly with uv to improve
 performance and user experience.
 
+## Choosing a build backend
+
+The uv build backend is a great choice for most Python projects. It has reasonable defaults, with
+the goal of requiring zero configuration for most users, but provides flexible configuration to
+accommodate most Python project structures. It integrates tightly with uv, to improve messaging and
+user experience. It validates project metadata and structures, preventing common mistakes. And,
+finally, it's very fast.
+
+The uv build backend currently **only supports pure Python code**. An alternative backend is
+required to build a
+[library with extension modules](../concepts/projects/init.md#projects-with-extension-modules).
+
+!!! tip
+
+    While the backend supports a number of options for configuring your project structure, when build scripts or
+    a more flexible project layout are required, consider using the
+    [hatchling](https://hatch.pypa.io/latest/config/build/#build-system) build backend instead.
+
 ## Using the uv build backend
-
-!!! important
-
-    The uv build backend currently **only supports pure Python code**. An alternative backend is to
-    build a [library with extension modules](../concepts/projects/init.md#projects-with-extension-modules).
 
 To use uv as a build backend in an existing project, add `uv_build` to the
 [`[build-system]`](../concepts/projects/config.md#build-systems) section in your `pyproject.toml`:
 
 ```toml title="pyproject.toml"
 [build-system]
-requires = ["uv_build>=0.7.18,<0.8.0"]
+requires = ["uv_build>=0.7.19,<0.8.0"]
 build-backend = "uv_build"
 ```
 

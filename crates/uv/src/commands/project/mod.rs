@@ -25,7 +25,7 @@ use uv_fs::{CWD, LockedFile, Simplified};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{SatisfiesResult, SitePackages};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
-use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep440::{TildeVersionSpecifier, Version, VersionSpecifiers};
 use uv_pep508::MarkerTreeContents;
 use uv_pypi_types::{ConflictPackage, ConflictSet, Conflicts};
 use uv_python::{
@@ -420,6 +420,30 @@ pub(crate) fn find_requires_python(
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);
+    }
+    for ((package, group), specifiers) in &requires_python {
+        if let [spec] = &specifiers[..] {
+            if let Some(spec) = TildeVersionSpecifier::from_specifier_ref(spec) {
+                if spec.has_patch() {
+                    continue;
+                }
+                let (lower, upper) = spec.bounding_specifiers();
+                let spec_0 = spec.with_patch_version(0);
+                let (lower_0, upper_0) = spec_0.bounding_specifiers();
+                warn_user_once!(
+                    "The `requires-python` specifier (`{spec}`) in `{package}{group}` \
+                    uses the tilde specifier (`~=`) without a patch version. This will be \
+                    interpreted as `{lower}, {upper}`. Did you mean `{spec_0}` to constrain the \
+                    version as `{lower_0}, {upper_0}`? We recommend only using \
+                    the tilde specifier with a patch version to avoid ambiguity.",
+                    group = if let Some(group) = group {
+                        format!(":{group}")
+                    } else {
+                        String::new()
+                    },
+                );
+            }
+        }
     }
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(requires_python) => Ok(Some(requires_python)),
@@ -1220,7 +1244,12 @@ impl ProjectEnvironment {
         preview: PreviewMode,
     ) -> Result<Self, ProjectError> {
         // Lock the project environment to avoid synchronization issues.
-        let _lock = ProjectInterpreter::lock(workspace).await?;
+        let _lock = ProjectInterpreter::lock(workspace)
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire project environment lock: {err}");
+            })
+            .ok();
 
         let upgradeable = preview.is_enabled()
             && python
@@ -1438,7 +1467,13 @@ impl ScriptEnvironment {
         preview: PreviewMode,
     ) -> Result<Self, ProjectError> {
         // Lock the script environment to avoid synchronization issues.
-        let _lock = ScriptInterpreter::lock(script).await?;
+        let _lock = ScriptInterpreter::lock(script)
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire script environment lock: {err}");
+            })
+            .ok();
+
         let upgradeable = python_request
             .as_ref()
             .is_none_or(|request| !request.includes_patch());
@@ -1626,16 +1661,7 @@ pub(crate) async fn resolve_names(
         .keyring(*keyring_provider)
         .allow_insecure_host(network_settings.allow_insecure_host.clone());
 
-    // Add all authenticated sources to the cache.
-    for index in index_locations.allowed_indexes() {
-        if let Some(credentials) = index.credentials() {
-            let credentials = Arc::new(credentials);
-            uv_auth::store_credentials(index.raw_url(), credentials.clone());
-            if let Some(root_url) = index.root_url() {
-                uv_auth::store_credentials(&root_url, credentials.clone());
-            }
-        }
-    }
+    index_locations.cache_index_credentials();
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::try_from(client_builder)?
@@ -1797,16 +1823,7 @@ pub(crate) async fn resolve_environment(
     let marker_env = interpreter.resolver_marker_environment();
     let python_requirement = PythonRequirement::from_interpreter(interpreter);
 
-    // Add all authenticated sources to the cache.
-    for index in index_locations.allowed_indexes() {
-        if let Some(credentials) = index.credentials() {
-            let credentials = Arc::new(credentials);
-            uv_auth::store_credentials(index.raw_url(), credentials.clone());
-            if let Some(root_url) = index.root_url() {
-                uv_auth::store_credentials(&root_url, credentials.clone());
-            }
-        }
-    }
+    index_locations.cache_index_credentials();
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::try_from(client_builder)?
@@ -1978,16 +1995,7 @@ pub(crate) async fn sync_environment(
     let interpreter = venv.interpreter();
     let tags = venv.interpreter().tags()?;
 
-    // Add all authenticated sources to the cache.
-    for index in index_locations.allowed_indexes() {
-        if let Some(credentials) = index.credentials() {
-            let credentials = Arc::new(credentials);
-            uv_auth::store_credentials(index.raw_url(), credentials.clone());
-            if let Some(root_url) = index.root_url() {
-                uv_auth::store_credentials(&root_url, credentials.clone());
-            }
-        }
-    }
+    index_locations.cache_index_credentials();
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::try_from(client_builder)?
@@ -2193,16 +2201,7 @@ pub(crate) async fn update_environment(
         }
     }
 
-    // Add all authenticated sources to the cache.
-    for index in index_locations.allowed_indexes() {
-        if let Some(credentials) = index.credentials() {
-            let credentials = Arc::new(credentials);
-            uv_auth::store_credentials(index.raw_url(), credentials.clone());
-            if let Some(root_url) = index.root_url() {
-                uv_auth::store_credentials(&root_url, credentials.clone());
-            }
-        }
-    }
+    index_locations.cache_index_credentials();
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::try_from(client_builder)?
