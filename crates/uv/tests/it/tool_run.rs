@@ -1127,6 +1127,70 @@ fn tool_run_without_output() {
 
 #[test]
 #[cfg(not(windows))]
+fn tool_run_csv_with_shorthand() -> anyhow::Result<()> {
+    let context = TestContext::new("3.12").with_filtered_counts();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+
+    let anyio_local = context.temp_dir.child("src").child("anyio_local");
+    copy_dir_all(
+        context.workspace_root.join("scripts/packages/anyio_local"),
+        &anyio_local,
+    )?;
+
+    let black_editable = context.temp_dir.child("src").child("black_editable");
+    copy_dir_all(
+        context
+            .workspace_root
+            .join("scripts/packages/black_editable"),
+        &black_editable,
+    )?;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["anyio", "sniffio==1.3.1"]
+        "#
+    })?;
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(indoc! { r"
+        import sniffio
+       "
+    })?;
+
+    // Performs a tool run with a comma-separated `--with` flag.
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("-w")
+        .arg("iniconfig,typing-extensions")
+        .arg("pytest")
+        .arg("--version")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @r###"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    pytest 8.1.1
+
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + iniconfig==2.0.0
+     + packaging==24.0
+     + pluggy==1.4.0
+     + pytest==8.1.1
+     + typing-extensions==4.10.0
+    "###);
+
+    Ok(())
+}
+
+#[test]
+#[cfg(not(windows))]
 fn tool_run_csv_with() -> anyhow::Result<()> {
     let context = TestContext::new("3.12").with_filtered_counts();
     let tool_dir = context.temp_dir.child("tools");
@@ -2047,6 +2111,54 @@ fn tool_run_python_at_version() {
     ----- stderr -----
     error: Requesting the 'latest' Python version is not yet supported
     "###);
+}
+
+#[test]
+fn tool_run_hint_version_not_available() {
+    let context = TestContext::new_with_versions(&[])
+        .with_filtered_counts()
+        .with_filtered_python_sources();
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("python@3.12")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("python@3.12")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
+        .env(EnvVars::UV_OFFLINE, "true"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("python@3.12")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
+        .env(EnvVars::UV_NO_MANAGED_PYTHON, "true"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
+    ");
 }
 
 #[test]

@@ -1802,6 +1802,7 @@ async fn run_project(
                 args.install_options,
                 args.modifications,
                 args.python,
+                args.python_platform,
                 args.install_mirrors,
                 globals.python_preference,
                 globals.python_downloads,
@@ -2041,7 +2042,7 @@ async fn run_project(
             let strict = project_was_explicit
                 || globals.preview.is_enabled()
                 || args.dry_run
-                || args.bump.is_some()
+                || !args.bump.is_empty()
                 || args.value.is_some()
                 || args.package.is_some();
             Box::pin(commands::project_version(
