@@ -57,6 +57,8 @@ pub(crate) mod commands;
 pub(crate) mod logging;
 pub(crate) mod printer;
 pub(crate) mod settings;
+#[cfg(windows)]
+mod windows_exception;
 
 #[instrument(skip_all)]
 async fn run(mut cli: Cli) -> Result<ExitStatus> {
@@ -1816,6 +1818,7 @@ async fn run_project(
                 &cache,
                 printer,
                 globals.preview,
+                args.output_format,
             ))
             .await
         }
@@ -2189,6 +2192,9 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
+    #[cfg(windows)]
+    windows_exception::setup();
+
     // Set the `UV` variable to the current executable so it is implicitly propagated to all child
     // processes, e.g., in `uv run`.
     if let Ok(current_exe) = std::env::current_exe() {
