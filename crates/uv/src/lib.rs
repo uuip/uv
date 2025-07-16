@@ -1402,6 +1402,8 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
                 args.targets,
                 args.reinstall,
                 upgrade,
+                args.bin,
+                args.registry,
                 args.force,
                 args.python_install_mirror,
                 args.pypy_install_mirror,
@@ -1430,6 +1432,8 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
                 args.targets,
                 reinstall,
                 upgrade,
+                args.bin,
+                args.registry,
                 args.force,
                 args.python_install_mirror,
                 args.pypy_install_mirror,
@@ -1531,6 +1535,12 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             show_settings!(args);
 
             commands::python_dir(args.bin)?;
+            Ok(ExitStatus::Success)
+        }
+        Commands::Python(PythonNamespace {
+            command: PythonCommand::UpdateShell,
+        }) => {
+            commands::python_update_shell(printer).await?;
             Ok(ExitStatus::Success)
         }
         Commands::Publish(args) => {

@@ -4856,6 +4856,19 @@ pub enum PythonCommand {
 
     /// Uninstall Python versions.
     Uninstall(PythonUninstallArgs),
+
+    /// Ensure that the Python executable directory is on the `PATH`.
+    ///
+    /// If the Python executable directory is not present on the `PATH`, uv will attempt to add it to
+    /// the relevant shell configuration files.
+    ///
+    /// If the shell configuration files already include a blurb to add the executable directory to
+    /// the path, but the directory is not present on the `PATH`, uv will exit with an error.
+    ///
+    /// The Python executable directory is determined according to the XDG standard and can be
+    /// retrieved with `uv python dir --bin`.
+    #[command(alias = "ensurepath")]
+    UpdateShell,
 }
 
 #[derive(Args)]
@@ -4941,6 +4954,30 @@ pub struct PythonInstallArgs {
     #[arg(long, short, env = EnvVars::UV_PYTHON_INSTALL_DIR)]
     pub install_dir: Option<PathBuf>,
 
+    /// Install a Python executable into the `bin` directory.
+    ///
+    /// This is the default behavior. If this flag is provided explicitly, uv will error if the
+    /// executable cannot be installed.
+    ///
+    /// See `UV_PYTHON_BIN_DIR` to customize the target directory.
+    #[arg(long, overrides_with("no_bin"), hide = true)]
+    pub bin: bool,
+
+    /// Do not install a Python executable into the `bin` directory.
+    #[arg(long, overrides_with("bin"), conflicts_with("default"))]
+    pub no_bin: bool,
+
+    /// Register the Python installation in the Windows registry.
+    ///
+    /// This is the default behavior on Windows. If this flag is provided explicitly, uv will error if the
+    /// registry entry cannot be created.
+    #[arg(long, overrides_with("no_registry"), hide = true)]
+    pub registry: bool,
+
+    /// Do not register the Python installation in the Windows registry.
+    #[arg(long, overrides_with("registry"))]
+    pub no_registry: bool,
+
     /// The Python version(s) to install.
     ///
     /// If not provided, the requested Python version(s) will be read from the `UV_PYTHON`
@@ -5003,7 +5040,7 @@ pub struct PythonInstallArgs {
     /// and `python`.
     ///
     /// If multiple Python versions are requested, uv will exit with an error.
-    #[arg(long)]
+    #[arg(long, conflicts_with("no_bin"))]
     pub default: bool,
 }
 

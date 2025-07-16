@@ -135,6 +135,14 @@ impl Changelog {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum InstallErrorKind {
+    DownloadUnpack,
+    Bin,
+    #[cfg(windows)]
+    Registry,
+}
+
 /// Download and install Python versions.
 #[allow(clippy::fn_params_excessive_bools)]
 pub(crate) async fn install(
@@ -143,6 +151,8 @@ pub(crate) async fn install(
     targets: Vec<String>,
     reinstall: bool,
     upgrade: bool,
+    bin: Option<bool>,
+    registry: Option<bool>,
     force: bool,
     python_install_mirror: Option<String>,
     pypy_install_mirror: Option<String>,
@@ -432,12 +442,16 @@ pub(crate) async fn install(
                 downloaded.push(installation.clone());
             }
             Err(err) => {
-                errors.push((download.key().clone(), anyhow::Error::new(err)));
+                errors.push((
+                    InstallErrorKind::DownloadUnpack,
+                    download.key().clone(),
+                    anyhow::Error::new(err),
+                ));
             }
         }
     }
 
-    let bin = if preview.is_enabled() {
+    let bin_dir = if matches!(bin, Some(true)) || preview.is_enabled() {
         Some(python_executable_dir()?)
     } else {
         None
@@ -460,7 +474,7 @@ pub(crate) async fn install(
             continue;
         }
 
-        let bin = bin
+        let bin_dir = bin_dir
             .as_ref()
             .expect("We should have a bin directory with preview enabled")
             .as_path();
@@ -468,27 +482,38 @@ pub(crate) async fn install(
         let upgradeable = (default || is_default_install)
             || requested_minor_versions.contains(&installation.key().version().python_version());
 
-        create_bin_links(
-            installation,
-            bin,
-            reinstall,
-            force,
-            default,
-            upgradeable,
-            upgrade,
-            is_default_install,
-            first_request,
-            &existing_installations,
-            &installations,
-            &mut changelog,
-            &mut errors,
-            preview,
-        )?;
+        if !matches!(bin, Some(false)) {
+            create_bin_links(
+                installation,
+                bin_dir,
+                reinstall,
+                force,
+                default,
+                upgradeable,
+                upgrade,
+                is_default_install,
+                first_request,
+                &existing_installations,
+                &installations,
+                &mut changelog,
+                &mut errors,
+                preview,
+            );
+        }
 
-        if preview.is_enabled() {
+        if preview.is_enabled() && !matches!(registry, Some(false)) {
             #[cfg(windows)]
             {
-                uv_python::windows_registry::create_registry_entry(installation, &mut errors)?;
+                match uv_python::windows_registry::create_registry_entry(installation) {
+                    Ok(()) => {}
+                    Err(err) => {
+                        errors.push((
+                            InstallErrorKind::Registry,
+                            installation.key().clone(),
+                            err.into(),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -636,24 +661,54 @@ pub(crate) async fn install(
             }
         }
 
-        if preview.is_enabled() {
-            let bin = bin
+        if preview.is_enabled() && !matches!(bin, Some(false)) {
+            let bin_dir = bin_dir
                 .as_ref()
                 .expect("We should have a bin directory with preview enabled")
                 .as_path();
-            warn_if_not_on_path(bin);
+            warn_if_not_on_path(bin_dir);
         }
     }
 
     if !errors.is_empty() {
-        for (key, err) in errors
+        // If there are only side-effect install errors and the user didn't opt-in, we're only going
+        // to warn
+        let fatal = !errors.iter().all(|(kind, _, _)| match kind {
+            InstallErrorKind::Bin => bin.is_none(),
+            #[cfg(windows)]
+            InstallErrorKind::Registry => registry.is_none(),
+            InstallErrorKind::DownloadUnpack => false,
+        });
+
+        for (kind, key, err) in errors
             .into_iter()
-            .sorted_unstable_by(|(key_a, _), (key_b, _)| key_a.cmp(key_b))
+            .sorted_unstable_by(|(_, key_a, _), (_, key_b, _)| key_a.cmp(key_b))
         {
+            let (level, verb) = match kind {
+                InstallErrorKind::DownloadUnpack => ("error".red().bold().to_string(), "install"),
+                InstallErrorKind::Bin => {
+                    let level = match bin {
+                        None => "warning".yellow().bold().to_string(),
+                        Some(false) => continue,
+                        Some(true) => "error".red().bold().to_string(),
+                    };
+                    (level, "install executable for")
+                }
+                #[cfg(windows)]
+                InstallErrorKind::Registry => {
+                    let level = match registry {
+                        None => "warning".yellow().bold().to_string(),
+                        Some(false) => continue,
+                        Some(true) => "error".red().bold().to_string(),
+                    };
+                    (level, "install registry entry for")
+                }
+            };
+
             writeln!(
                 printer.stderr(),
-                "{}: Failed to install {}",
-                "error".red().bold(),
+                "{level}{} Failed to {verb} {}",
+                ":".bold(),
                 key.green()
             )?;
             for err in err.chain() {
@@ -665,13 +720,18 @@ pub(crate) async fn install(
                 )?;
             }
         }
-        return Ok(ExitStatus::Failure);
+
+        if fatal {
+            return Ok(ExitStatus::Failure);
+        }
     }
 
     Ok(ExitStatus::Success)
 }
 
 /// Link the binaries of a managed Python installation to the bin directory.
+///
+/// This function is fallible, but errors are pushed to `errors` instead of being thrown.
 #[allow(clippy::fn_params_excessive_bools)]
 fn create_bin_links(
     installation: &ManagedPythonInstallation,
@@ -686,9 +746,9 @@ fn create_bin_links(
     existing_installations: &[ManagedPythonInstallation],
     installations: &[&ManagedPythonInstallation],
     changelog: &mut Changelog,
-    errors: &mut Vec<(PythonInstallationKey, Error)>,
+    errors: &mut Vec<(InstallErrorKind, PythonInstallationKey, Error)>,
     preview: PreviewMode,
-) -> Result<(), Error> {
+) {
     let targets =
         if (default || is_default_install) && first_request.matches_installation(installation) {
             vec![
@@ -773,6 +833,7 @@ fn create_bin_links(
                                     );
                                 } else {
                                     errors.push((
+                                        InstallErrorKind::Bin,
                                         installation.key().clone(),
                                         anyhow::anyhow!(
                                             "Executable already exists at `{}` but is not managed by uv; use `--force` to replace it",
@@ -848,7 +909,17 @@ fn create_bin_links(
                 }
 
                 // Replace the existing link
-                fs_err::remove_file(&to)?;
+                if let Err(err) = fs_err::remove_file(&to) {
+                    errors.push((
+                        InstallErrorKind::Bin,
+                        installation.key().clone(),
+                        anyhow::anyhow!(
+                            "Executable already exists at `{}` but could not be removed: {err}",
+                            to.simplified_display()
+                        ),
+                    ));
+                    continue;
+                }
 
                 if let Some(existing) = existing {
                     // Ensure we do not report installation of this executable for an existing
@@ -860,7 +931,18 @@ fn create_bin_links(
                         .remove(&target);
                 }
 
-                create_link_to_executable(&target, executable)?;
+                if let Err(err) = create_link_to_executable(&target, executable) {
+                    errors.push((
+                        InstallErrorKind::Bin,
+                        installation.key().clone(),
+                        anyhow::anyhow!(
+                            "Failed to create link at `{}`: {err}",
+                            target.simplified_display()
+                        ),
+                    ));
+                    continue;
+                }
+
                 debug!(
                     "Updated executable at `{}` to {}",
                     target.simplified_display(),
@@ -874,11 +956,14 @@ fn create_bin_links(
                     .insert(target.clone());
             }
             Err(err) => {
-                errors.push((installation.key().clone(), anyhow::Error::new(err)));
+                errors.push((
+                    InstallErrorKind::Bin,
+                    installation.key().clone(),
+                    anyhow::Error::new(err),
+                ));
             }
         }
     }
-    Ok(())
 }
 
 pub(crate) fn format_executables(
@@ -908,20 +993,29 @@ fn warn_if_not_on_path(bin: &Path) {
     if !Shell::contains_path(bin) {
         if let Some(shell) = Shell::from_env() {
             if let Some(command) = shell.prepend_path(bin) {
-                warn_user!(
-                    "`{}` is not on your PATH. To use the installed Python executable, run `{}`.",
-                    bin.simplified_display().cyan(),
-                    command.green(),
-                );
+                if shell.supports_update() {
+                    warn_user!(
+                        "`{}` is not on your PATH. To use installed Python executables, run `{}` or `{}`.",
+                        bin.simplified_display().cyan(),
+                        command.green(),
+                        "uv python update-shell".green()
+                    );
+                } else {
+                    warn_user!(
+                        "`{}` is not on your PATH. To use installed Python executables, run `{}`.",
+                        bin.simplified_display().cyan(),
+                        command.green()
+                    );
+                }
             } else {
                 warn_user!(
-                    "`{}` is not on your PATH. To use the installed Python executable, add the directory to your PATH.",
+                    "`{}` is not on your PATH. To use installed Python executables, add the directory to your PATH.",
                     bin.simplified_display().cyan(),
                 );
             }
         } else {
             warn_user!(
-                "`{}` is not on your PATH. To use the installed Python executable, add the directory to your PATH.",
+                "`{}` is not on your PATH. To use installed Python executables, add the directory to your PATH.",
                 bin.simplified_display().cyan(),
             );
         }
