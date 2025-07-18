@@ -4633,7 +4633,7 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.7.21"
+version = "0.8.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -4696,7 +4696,6 @@ dependencies = [
  "uv-client",
  "uv-configuration",
  "uv-console",
- "uv-dirs",
  "uv-dispatch",
  "uv-distribution",
  "uv-distribution-filename",
@@ -4800,7 +4799,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.7.21"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "uv-build-backend",
@@ -5993,24 +5992,28 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.7.21"
+version = "0.8.0"
 
 [[package]]
 name = "uv-virtualenv"
 version = "0.0.4"
 dependencies = [
+ "console 0.15.11",
  "fs-err 3.1.1",
  "itertools 0.14.0",
+ "owo-colors",
  "pathdiff",
  "self-replace",
  "thiserror 2.0.12",
  "tracing",
  "uv-configuration",
+ "uv-console",
  "uv-fs",
  "uv-pypi-types",
  "uv-python",
  "uv-shell",
  "uv-version",
+ "uv-warnings",
 ]
 
 [[package]]

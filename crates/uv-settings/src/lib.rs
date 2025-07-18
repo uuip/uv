@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use uv_dirs::{system_config_file, user_config_dir};
 use uv_fs::Simplified;
+use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
 pub use crate::combine::*;
@@ -200,32 +201,70 @@ fn read_file(path: &Path) -> Result<Options, Error> {
 
 /// Validate that an [`Options`] schema is compatible with `uv.toml`.
 fn validate_uv_toml(path: &Path, options: &Options) -> Result<(), Error> {
+    let Options {
+        globals: _,
+        top_level: _,
+        install_mirrors: _,
+        publish: _,
+        add: _,
+        pip: _,
+        cache_keys: _,
+        override_dependencies: _,
+        constraint_dependencies: _,
+        build_constraint_dependencies: _,
+        environments: _,
+        required_environments: _,
+        conflicts,
+        workspace,
+        sources,
+        dev_dependencies,
+        default_groups,
+        dependency_groups,
+        managed,
+        package,
+        build_backend,
+    } = options;
     // The `uv.toml` format is not allowed to include any of the following, which are
     // permitted by the schema since they _can_ be included in `pyproject.toml` files
     // (and we want to use `deny_unknown_fields`).
-    if options.workspace.is_some() {
+    if conflicts.is_some() {
+        return Err(Error::PyprojectOnlyField(path.to_path_buf(), "conflicts"));
+    }
+    if workspace.is_some() {
         return Err(Error::PyprojectOnlyField(path.to_path_buf(), "workspace"));
     }
-    if options.sources.is_some() {
+    if sources.is_some() {
         return Err(Error::PyprojectOnlyField(path.to_path_buf(), "sources"));
     }
-    if options.dev_dependencies.is_some() {
+    if dev_dependencies.is_some() {
         return Err(Error::PyprojectOnlyField(
             path.to_path_buf(),
             "dev-dependencies",
         ));
     }
-    if options.default_groups.is_some() {
+    if default_groups.is_some() {
         return Err(Error::PyprojectOnlyField(
             path.to_path_buf(),
             "default-groups",
         ));
     }
-    if options.managed.is_some() {
+    if dependency_groups.is_some() {
+        return Err(Error::PyprojectOnlyField(
+            path.to_path_buf(),
+            "dependency-groups",
+        ));
+    }
+    if managed.is_some() {
         return Err(Error::PyprojectOnlyField(path.to_path_buf(), "managed"));
     }
-    if options.package.is_some() {
+    if package.is_some() {
         return Err(Error::PyprojectOnlyField(path.to_path_buf(), "package"));
+    }
+    if build_backend.is_some() {
+        return Err(Error::PyprojectOnlyField(
+            path.to_path_buf(),
+            "build-backend",
+        ));
     }
     Ok(())
 }
@@ -246,4 +285,85 @@ pub enum Error {
 
     #[error("Failed to parse: `{}`. The `{}` field is not allowed in a `uv.toml` file. `{}` is only applicable in the context of a project, and should be placed in a `pyproject.toml` file instead.", _0.user_display(), _1, _1)]
     PyprojectOnlyField(PathBuf, &'static str),
+
+    #[error("Failed to parse environment variable `{name}` with invalid value `{value}`: {err}")]
+    InvalidEnvironmentVariable {
+        name: String,
+        value: String,
+        err: String,
+    },
+}
+
+/// Options loaded from environment variables.
+///
+/// This is currently a subset of all respected environment variables, most are parsed via Clap at
+/// the CLI level, however there are limited semantics in that context.
+#[derive(Debug, Clone)]
+pub struct EnvironmentOptions {
+    pub python_install_bin: Option<bool>,
+    pub python_install_registry: Option<bool>,
+}
+
+impl EnvironmentOptions {
+    /// Create a new [`EnvironmentOptions`] from environment variables.
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            python_install_bin: parse_boolish_environment_variable(EnvVars::UV_PYTHON_INSTALL_BIN)?,
+            python_install_registry: parse_boolish_environment_variable(
+                EnvVars::UV_PYTHON_INSTALL_REGISTRY,
+            )?,
+        })
+    }
+}
+
+/// Parse a boolean environment variable.
+///
+/// Adapted from Clap's `BoolishValueParser` which is dual licensed under the MIT and Apache-2.0.
+fn parse_boolish_environment_variable(name: &'static str) -> Result<Option<bool>, Error> {
+    // See `clap_builder/src/util/str_to_bool.rs`
+    // We want to match Clap's accepted values
+
+    // True values are `y`, `yes`, `t`, `true`, `on`, and `1`.
+    const TRUE_LITERALS: [&str; 6] = ["y", "yes", "t", "true", "on", "1"];
+
+    // False values are `n`, `no`, `f`, `false`, `off`, and `0`.
+    const FALSE_LITERALS: [&str; 6] = ["n", "no", "f", "false", "off", "0"];
+
+    // Converts a string literal representation of truth to true or false.
+    //
+    // `false` values are `n`, `no`, `f`, `false`, `off`, and `0` (case insensitive).
+    //
+    // Any other value will be considered as `true`.
+    fn str_to_bool(val: impl AsRef<str>) -> Option<bool> {
+        let pat: &str = &val.as_ref().to_lowercase();
+        if TRUE_LITERALS.contains(&pat) {
+            Some(true)
+        } else if FALSE_LITERALS.contains(&pat) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+
+    let Some(value) = value.to_str() else {
+        return Err(Error::InvalidEnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string_lossy().to_string(),
+            err: "expected a valid UTF-8 string".to_string(),
+        });
+    };
+
+    let Some(value) = str_to_bool(value) else {
+        return Err(Error::InvalidEnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            err: "expected a boolish value".to_string(),
+        });
+    };
+
+    Ok(Some(value))
 }
