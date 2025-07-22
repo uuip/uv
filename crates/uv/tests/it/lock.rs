@@ -18597,6 +18597,42 @@ fn lock_dependency_metadata() -> Result<()> {
     Removed sniffio v1.3.1
     "###);
 
+    // Update the static metadata.
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "anyio"
+        version = "3.7.0"
+        requires_dist = ["typing-extensions"]
+        "#,
+    )?;
+
+    // The operation should warn.
+    uv_snapshot!(context.filters(), context.lock(), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Failed to parse `pyproject.toml` during settings discovery:
+      TOML parse error at line 11, column 9
+         |
+      11 |         requires_dist = ["typing-extensions"]
+         |         ^^^^^^^^^^^^^
+      unknown field `requires_dist`, expected one of `name`, `version`, `requires-dist`, `requires-python`, `provides-extras`
+
+    Resolved 4 packages in [TIME]
+    Added idna v3.6
+    Removed iniconfig v2.0.0
+    Added sniffio v1.3.1
+    "#);
+
     Ok(())
 }
 
@@ -18868,7 +18904,7 @@ fn lock_duplicate_sources() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @r###"
+    uv_snapshot!(context.filters(), context.lock(), @r#"
     success: false
     exit_code: 2
     ----- stdout -----
@@ -18878,17 +18914,16 @@ fn lock_duplicate_sources() -> Result<()> {
       TOML parse error at line 9, column 9
         |
       9 |         python-multipart = { url = "https://files.pythonhosted.org/packages/c0/3e/9fbfd74e7f5b54f653f7ca99d44ceb56e718846920162165061c4c22b71a/python_multipart-0.0.8-py3-none-any.whl" }
-        |         ^
-      duplicate key `python-multipart` in table `tool.uv.sources`
+        |         ^^^^^^^^^^^^^^^^
+      duplicate key
 
     error: Failed to parse: `pyproject.toml`
       Caused by: TOML parse error at line 9, column 9
       |
     9 |         python-multipart = { url = "https://files.pythonhosted.org/packages/c0/3e/9fbfd74e7f5b54f653f7ca99d44ceb56e718846920162165061c4c22b71a/python_multipart-0.0.8-py3-none-any.whl" }
-      |         ^
-    duplicate key `python-multipart` in table `tool.uv.sources`
-
-    "###);
+      |         ^^^^^^^^^^^^^^^^
+    duplicate key
+    "#);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(

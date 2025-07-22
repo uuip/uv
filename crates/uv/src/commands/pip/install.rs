@@ -22,6 +22,7 @@ use uv_distribution_types::{
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_installer::{SatisfiesResult, SitePackages};
+use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep508::PackageName;
 use uv_pypi_types::Conflicts;
 use uv_python::{
@@ -439,11 +440,46 @@ pub(crate) async fn pip_install(
         let install_path = std::path::absolute(&pylock)?;
         let install_path = install_path.parent().unwrap();
         let content = fs_err::tokio::read_to_string(&pylock).await?;
-        let lock = toml::from_str::<PylockToml>(&content)
-            .with_context(|| format!("Not a valid pylock.toml file: {}", pylock.user_display()))?;
+        let lock = toml::from_str::<PylockToml>(&content).with_context(|| {
+            format!("Not a valid `pylock.toml` file: {}", pylock.user_display())
+        })?;
 
-        let resolution =
-            lock.to_resolution(install_path, marker_env.markers(), &tags, &build_options)?;
+        // Verify that the Python version is compatible with the lock file.
+        if let Some(requires_python) = lock.requires_python.as_ref() {
+            if !requires_python.contains(interpreter.python_version()) {
+                return Err(anyhow::anyhow!(
+                    "The requested interpreter resolved to Python {}, which is incompatible with the `pylock.toml`'s Python requirement: `{}`",
+                    interpreter.python_version(),
+                    requires_python,
+                ));
+            }
+        }
+
+        // Convert the extras and groups specifications into a concrete form.
+        let extras = extras.with_defaults(DefaultExtras::default());
+        let extras = extras
+            .extra_names(lock.extras.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let groups = groups
+            .get(&pylock)
+            .cloned()
+            .unwrap_or_default()
+            .with_defaults(DefaultGroups::List(lock.default_groups.clone()));
+        let groups = groups
+            .group_names(lock.dependency_groups.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let resolution = lock.to_resolution(
+            install_path,
+            marker_env.markers(),
+            &extras,
+            &groups,
+            &tags,
+            &build_options,
+        )?;
         let hasher = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
 
         (resolution, hasher)
