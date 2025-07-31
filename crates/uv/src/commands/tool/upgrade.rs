@@ -3,6 +3,7 @@ use itertools::Itertools;
 use owo_colors::{AnsiColors, OwoColorize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::str::FromStr;
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -19,7 +20,7 @@ use uv_requirements::RequirementsSpecification;
 use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::InstalledTools;
 use uv_warnings::write_error_chain;
-use uv_workspace::WorkspaceCache;
+use uv_workspace::{WorkspaceCache, pyproject::ExtraBuildDependencies};
 
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
@@ -337,6 +338,7 @@ async fn upgrade_tool(
             spec,
             Modifications::Exact,
             build_constraints,
+            uv_distribution::ExtraBuildRequires::from_lowered(ExtraBuildDependencies::default()),
             &settings,
             network_settings,
             &state,
@@ -371,12 +373,19 @@ async fn upgrade_tool(
         // existing executables.
         remove_entrypoints(&existing_tool_receipt);
 
+        let entrypoints: Vec<_> = existing_tool_receipt
+            .entrypoints()
+            .iter()
+            .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
+            .collect();
+
         // If we modified the target tool, reinstall the entrypoints.
         finalize_tool_install(
             &environment,
             name,
+            &entrypoints,
             installed_tools,
-            ToolOptions::from(options),
+            &ToolOptions::from(options),
             true,
             existing_tool_receipt.python().to_owned(),
             existing_tool_receipt.requirements().to_vec(),
