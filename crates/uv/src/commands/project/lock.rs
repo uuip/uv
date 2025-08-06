@@ -62,15 +62,15 @@ pub(crate) enum LockResult {
 impl LockResult {
     pub(crate) fn lock(&self) -> &Lock {
         match self {
-            LockResult::Unchanged(lock) => lock,
-            LockResult::Changed(_, lock) => lock,
+            Self::Unchanged(lock) => lock,
+            Self::Changed(_, lock) => lock,
         }
     }
 
     pub(crate) fn into_lock(self) -> Lock {
         match self {
-            LockResult::Unchanged(lock) => lock,
-            LockResult::Changed(_, lock) => lock,
+            Self::Unchanged(lock) => lock,
+            Self::Changed(_, lock) => lock,
         }
     }
 }
@@ -688,11 +688,14 @@ async fn do_lock(
     }
     .into_inner();
 
+    // Convert to the `Constraints` format.
+    let dispatch_constraints = Constraints::from_requirements(build_constraints.iter().cloned());
+
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
         &client,
         cache,
-        Constraints::from_requirements(build_constraints.iter().cloned()),
+        &dispatch_constraints,
         interpreter,
         index_locations,
         &flat_index,

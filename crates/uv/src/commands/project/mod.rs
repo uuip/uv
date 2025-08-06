@@ -18,8 +18,8 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
 use uv_distribution_types::{
-    ExtraBuildRequires, Index, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
-    UnresolvedRequirementSpecification,
+    ExtraBuildRequirement, ExtraBuildRequires, Index, Requirement, RequiresPython, Resolution,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, LockedFile, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -46,6 +46,7 @@ use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy};
 use uv_virtualenv::remove_virtualenv;
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::pyproject::ExtraBuildDependency;
 use uv_workspace::pyproject::PyProjectToml;
 use uv_workspace::{RequiresPythonSources, Workspace, WorkspaceCache};
 
@@ -251,6 +252,9 @@ pub(crate) enum ProjectError {
 
     #[error(transparent)]
     PyprojectMut(#[from] uv_workspace::pyproject_mut::Error),
+
+    #[error(transparent)]
+    ExtraBuildRequires(#[from] uv_distribution_types::ExtraBuildRequiresError),
 
     #[error(transparent)]
     Fmt(#[from] std::fmt::Error),
@@ -736,8 +740,8 @@ impl ScriptInterpreter {
     /// Consume the [`PythonInstallation`] and return the [`Interpreter`].
     pub(crate) fn into_interpreter(self) -> Interpreter {
         match self {
-            ScriptInterpreter::Interpreter(interpreter) => interpreter,
-            ScriptInterpreter::Environment(venv) => venv.into_interpreter(),
+            Self::Interpreter(interpreter) => interpreter,
+            Self::Environment(venv) => venv.into_interpreter(),
         }
     }
 
@@ -1033,8 +1037,8 @@ impl ProjectInterpreter {
     /// Convert the [`ProjectInterpreter`] into an [`Interpreter`].
     pub(crate) fn into_interpreter(self) -> Interpreter {
         match self {
-            ProjectInterpreter::Interpreter(interpreter) => interpreter,
-            ProjectInterpreter::Environment(venv) => venv.into_interpreter(),
+            Self::Interpreter(interpreter) => interpreter,
+            Self::Environment(venv) => venv.into_interpreter(),
         }
     }
 
@@ -1073,11 +1077,11 @@ pub(crate) enum PythonRequestSource {
 impl std::fmt::Display for PythonRequestSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PythonRequestSource::UserRequest => write!(f, "explicit request"),
-            PythonRequestSource::DotPythonVersion(file) => {
+            Self::UserRequest => write!(f, "explicit request"),
+            Self::DotPythonVersion(file) => {
                 write!(f, "version file at `{}`", file.path().user_display())
             }
-            PythonRequestSource::RequiresPython => write!(f, "`requires-python` metadata"),
+            Self::RequiresPython => write!(f, "`requires-python` metadata"),
         }
     }
 }
@@ -1749,7 +1753,7 @@ pub(crate) async fn resolve_names(
     let build_dispatch = BuildDispatch::new(
         &client,
         cache,
-        build_constraints,
+        &build_constraints,
         interpreter,
         index_locations,
         &flat_index,
@@ -1964,7 +1968,7 @@ pub(crate) async fn resolve_environment(
     let resolve_dispatch = BuildDispatch::new(
         &client,
         cache,
-        build_constraints,
+        &build_constraints,
         interpreter,
         index_locations,
         &flat_index,
@@ -2109,7 +2113,7 @@ pub(crate) async fn sync_environment(
     let build_dispatch = BuildDispatch::new(
         &client,
         cache,
-        build_constraints,
+        &build_constraints,
         interpreter,
         index_locations,
         &flat_index,
@@ -2333,7 +2337,7 @@ pub(crate) async fn update_environment(
     let build_dispatch = BuildDispatch::new(
         &client,
         cache,
-        build_constraints,
+        &build_constraints,
         interpreter,
         index_locations,
         &flat_index,
@@ -2647,16 +2651,24 @@ pub(crate) fn script_extra_build_requires(
         let lowered_requirements: Vec<_> = requirements
             .iter()
             .cloned()
-            .flat_map(|requirement| {
-                LoweredRequirement::from_non_workspace_requirement(
-                    requirement,
-                    script_dir.as_ref(),
-                    script_sources,
-                    script_indexes,
-                    &settings.index_locations,
-                )
-                .map_ok(uv_distribution::LoweredRequirement::into_inner)
-            })
+            .flat_map(
+                |ExtraBuildDependency {
+                     requirement,
+                     match_runtime,
+                 }| {
+                    LoweredRequirement::from_non_workspace_requirement(
+                        requirement,
+                        script_dir.as_ref(),
+                        script_sources,
+                        script_indexes,
+                        &settings.index_locations,
+                    )
+                    .map_ok(move |requirement| ExtraBuildRequirement {
+                        requirement: requirement.into_inner(),
+                        match_runtime,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>, _>>()?;
         extra_build_requires.insert(name.clone(), lowered_requirements);
     }
