@@ -210,14 +210,8 @@ pub(crate) async fn export(
         Err(err) => return Err(err.into()),
     };
 
-    // Validate that the set of requested extras and development groups are compatible.
-    detect_conflicts(&lock, &extras, &groups)?;
-
-    // Get effective indexes (project-level overrides workspace-level)
-    let effective_indexes = get_effective_indexes(&target);
-
     // Identify the installation target.
-    let target = match &target {
+    let install_target = match &target {
         ExportTarget::Project(VirtualProject::Project(project)) => {
             if all_packages {
                 InstallTarget::Workspace {
@@ -265,9 +259,12 @@ pub(crate) async fn export(
         },
     };
 
+    // Validate that the set of requested extras and development groups are compatible.
+    detect_conflicts(&install_target, &extras, &groups)?;
+
     // Validate that the set of requested extras and development groups are defined in the lockfile.
-    target.validate_extras(&extras)?;
-    target.validate_groups(&groups)?;
+    install_target.validate_extras(&extras)?;
+    install_target.validate_groups(&groups)?;
 
     // Write the resolved dependencies to the output channel.
     let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file.as_deref());
@@ -307,11 +304,14 @@ pub(crate) async fn export(
         }
     }
 
+    // Get effective indexes (project-level overrides workspace-level)
+    let effective_indexes = get_effective_indexes(&target);
+
     // Generate the export.
     match format {
         ExportFormat::RequirementsTxt => {
             let export = RequirementsTxtExport::from_lock(
-                &target,
+                &install_target,
                 &prune,
                 &extras,
                 &groups,
@@ -334,7 +334,7 @@ pub(crate) async fn export(
         }
         ExportFormat::PylockToml => {
             let export = PylockToml::from_lock(
-                &target,
+                &install_target,
                 &prune,
                 &extras,
                 &groups,
