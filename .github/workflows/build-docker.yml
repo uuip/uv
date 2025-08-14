@@ -142,7 +142,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: depot/build-push-action@2583627a84956d07561420dcc1d0eb1f2af3fac0 # v1.15.0
+        uses: depot/build-push-action@0b7423b11016b0349604e22d7ea01b078bed6c70 # v1.16.0
         with:
           project: 7hd4vdzmw5 # astral-sh/uv
           context: .
@@ -241,8 +241,8 @@ jobs:
           # Loop through all base tags and append its docker metadata pattern to the list
           # Order is on purpose such that the label org.opencontainers.image.version has the first pattern with the full version
           IFS=','; for TAG in ${BASE_TAGS}; do
-            TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${TAG}\n"
-            TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${TAG}\n"
+            TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ version }},suffix=-${TAG},value=${VERSION}\n"
+            TAG_PATTERNS="${TAG_PATTERNS}type=pep440,pattern={{ major }}.{{ minor }},suffix=-${TAG},value=${VERSION}\n"
             TAG_PATTERNS="${TAG_PATTERNS}type=raw,value=${TAG}\n"
           done
 
@@ -256,7 +256,7 @@ jobs:
             echo EOF
           } >> $GITHUB_ENV
         env:
-          TAG: ${{ needs.docker-plan.outputs.tag }}
+          VERSION: ${{ needs.docker-plan.outputs.tag }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
@@ -275,7 +275,7 @@ jobs:
 
       - name: Build and push
         id: build-and-push
-        uses: depot/build-push-action@2583627a84956d07561420dcc1d0eb1f2af3fac0 # v1.15.0
+        uses: depot/build-push-action@0b7423b11016b0349604e22d7ea01b078bed6c70 # v1.16.0
         with:
           context: .
           project: 7hd4vdzmw5 # astral-sh/uv

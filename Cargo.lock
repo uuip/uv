@@ -4688,7 +4688,7 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "anstream",
  "anyhow",
@@ -4857,7 +4857,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "anyhow",
  "uv-build-backend",
@@ -5443,6 +5443,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tracing",
  "uv-cache-info",
+ "uv-configuration",
  "uv-distribution-filename",
  "uv-fs",
  "uv-normalize",
@@ -6079,7 +6080,7 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.8.9"
+version = "0.8.10"
 
 [[package]]
 name = "uv-virtualenv"

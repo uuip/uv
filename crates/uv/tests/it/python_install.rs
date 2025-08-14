@@ -2375,7 +2375,7 @@ fn python_install_emulated_macos() {
     ");
 
     // Install an x86_64 version (assuming an aarch64 host)
-    uv_snapshot!(context.filters(), context.python_install().arg("cpython-3.13-macos-x86_64"), @r"
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13-x86_64"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -2406,7 +2406,7 @@ fn python_install_emulated_macos() {
     ----- stderr -----
     ");
 
-    uv_snapshot!(context.filters(), context.python_install().arg("cpython-3.13-macos-aarch64"), @r"
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13-aarch64"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -2986,4 +2986,175 @@ fn uninstall_last_patch() {
     No Python at '"[TEMP_DIR]/managed/cpython-3.10-[PLATFORM]/python'
     "#
     );
+}
+
+#[cfg(unix)] // Pyodide cannot be used on Windows
+#[test]
+fn python_install_pyodide() {
+    use assert_cmd::assert::OutputAssertExt;
+
+    let context: TestContext = TestContext::new_with_versions(&[])
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs()
+        .with_python_download_cache();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("cpython-3.13.2-emscripten-wasm32-musl"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     + pyodide-3.13.2-emscripten-wasm32-musl (python3.13)
+    ");
+
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.13{}", std::env::consts::EXE_SUFFIX));
+
+    // The executable should be installed in the bin directory
+    bin_python.assert(predicate::path::exists());
+
+    // It should be a link
+    bin_python.assert(predicate::path::is_symlink());
+
+    // The link should be a path to the binary
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        insta::assert_snapshot!(
+            read_link(&bin_python), @"[TEMP_DIR]/managed/pyodide-3.13.2-emscripten-wasm32-musl/python"
+        );
+    });
+
+    // The executable should "work"
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+        .arg("-c").arg("import subprocess; print('hello world')"), @r###"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    hello world
+
+    ----- stderr -----
+    "###);
+
+    // We should be able to find the Pyodide interpreter
+    uv_snapshot!(context.filters(), context.python_find().arg("cpython-3.13.2-emscripten-wasm32-musl"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [TEMP_DIR]/managed/pyodide-3.13.2-emscripten-wasm32-musl/python
+
+    ----- stderr -----
+    ");
+
+    // We should be able to create a virtual environment with it
+    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("cpython-3.13.2-emscripten-wasm32-musl"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.13.2
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    // We should be able to run the Python in the virtual environment
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg("import subprocess; print('hello world')"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    hello world
+
+    ----- stderr -----
+    ");
+
+    context.python_uninstall().arg("--all").assert().success();
+    fs_err::remove_dir_all(&context.venv).unwrap();
+
+    // Install via `pyodide`
+    uv_snapshot!(context.filters(), context.python_install().arg("pyodide"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     + pyodide-3.13.2-emscripten-wasm32-musl (python3.13)
+    ");
+
+    context.python_uninstall().arg("--all").assert().success();
+
+    // Install via `pyodide@<version>`
+    uv_snapshot!(context.filters(), context.python_install().arg("pyodide@3.13"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Installed Python 3.13.2 in [TIME]
+     + pyodide-3.13.2-emscripten-wasm32-musl (python3.13)
+    ");
+
+    // Find via `pyodide``
+    uv_snapshot!(context.filters(), context.python_find().arg("pyodide"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [TEMP_DIR]/managed/pyodide-3.13.2-emscripten-wasm32-musl/python
+
+    ----- stderr -----
+    ");
+
+    // Find without a request should fail
+    uv_snapshot!(context.filters(), context.python_find(), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found in virtual environments, managed installations, or search path
+    ");
+    // Find with "cpython" should also fail
+    uv_snapshot!(context.filters(), context.python_find().arg("cpython"), @r"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: No interpreter found for CPython in virtual environments, managed installations, or search path
+    ");
+
+    // Install a CPython interpreter
+    let context = context.with_filtered_python_keys();
+    uv_snapshot!(context.filters(), context.python_install().arg("cpython"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Installed Python 3.13.6 in [TIME]
+     + cpython-3.13.6-[PLATFORM]
+    ");
+
+    // Now, we should prefer that
+    uv_snapshot!(context.filters(), context.python_find().arg("any"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.6-[PLATFORM]/bin/python3.13
+
+    ----- stderr -----
+    ");
+
+    // Unless we request pyodide
+    uv_snapshot!(context.filters(), context.python_find().arg("pyodide"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    [TEMP_DIR]/managed/pyodide-3.13.2-emscripten-wasm32-musl/python
+
+    ----- stderr -----
+    ");
 }
