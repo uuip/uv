@@ -142,7 +142,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: depot/build-push-action@0b7423b11016b0349604e22d7ea01b078bed6c70 # v1.16.0
+        uses: depot/build-push-action@0781b3393f28b17fe7982ea3fabe715825b35fad # v1.16.1
         with:
           project: 7hd4vdzmw5 # astral-sh/uv
           context: .
@@ -202,6 +202,18 @@ jobs:
           - python:3.10-slim-bookworm,python3.10-bookworm-slim
           - python:3.9-slim-bookworm,python3.9-bookworm-slim
           - python:3.8-slim-bookworm,python3.8-bookworm-slim
+          - python:3.14-rc-trixie,python3.14-rc-trixie
+          - python:3.13-trixie,python3.13-trixie
+          - python:3.12-trixie,python3.12-trixie
+          - python:3.11-trixie,python3.11-trixie
+          - python:3.10-trixie,python3.10-trixie
+          - python:3.9-trixie,python3.9-trixie
+          - python:3.14-rc-slim-trixie,python3.14-rc-trixie-slim
+          - python:3.13-slim-trixie,python3.13-trixie-slim
+          - python:3.12-slim-trixie,python3.12-trixie-slim
+          - python:3.11-slim-trixie,python3.11-trixie-slim
+          - python:3.10-slim-trixie,python3.10-trixie-slim
+          - python:3.9-slim-trixie,python3.9-trixie-slim
     steps:
       # Login to DockerHub (when not pushing, it's to avoid rate-limiting)
       - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
@@ -275,7 +287,7 @@ jobs:
 
       - name: Build and push
         id: build-and-push
-        uses: depot/build-push-action@0b7423b11016b0349604e22d7ea01b078bed6c70 # v1.16.0
+        uses: depot/build-push-action@0781b3393f28b17fe7982ea3fabe715825b35fad # v1.16.1
         with:
           context: .
           project: 7hd4vdzmw5 # astral-sh/uv

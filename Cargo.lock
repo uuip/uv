@@ -4688,7 +4688,7 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.8.10"
+version = "0.8.11"
 dependencies = [
  "anstream",
  "anyhow",
@@ -4857,7 +4857,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.8.10"
+version = "0.8.11"
 dependencies = [
  "anyhow",
  "uv-build-backend",
@@ -4927,6 +4927,7 @@ dependencies = [
  "uv-distribution",
  "uv-distribution-types",
  "uv-fs",
+ "uv-normalize",
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
@@ -5093,14 +5094,12 @@ dependencies = [
  "schemars",
  "serde",
  "serde-untagged",
- "serde_json",
  "thiserror 2.0.12",
  "tracing",
  "url",
  "uv-auth",
  "uv-cache",
  "uv-cache-info",
- "uv-cache-key",
  "uv-distribution-types",
  "uv-git",
  "uv-normalize",
@@ -6080,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.8.10"
+version = "0.8.11"
 
 [[package]]
 name = "uv-virtualenv"
