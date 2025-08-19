@@ -142,7 +142,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: depot/build-push-action@0781b3393f28b17fe7982ea3fabe715825b35fad # v1.16.1
+        uses: depot/build-push-action@9785b135c3c76c33db102e45be96a25ab55cd507 # v1.16.2
         with:
           project: 7hd4vdzmw5 # astral-sh/uv
           context: .
@@ -179,8 +179,11 @@ jobs:
         # Note, org.opencontainers.image.version label will use the first base tag (use the most specific tag first)
         image-mapping:
           - alpine:3.21,alpine3.21,alpine
+          - alpine:3.22,alpine3.22
           - debian:bookworm-slim,bookworm-slim,debian-slim
           - buildpack-deps:bookworm,bookworm,debian
+          - debian:trixie-slim,trixie-slim
+          - buildpack-deps:trixie,trixie
           - python:3.14-rc-alpine,python3.14-rc-alpine
           - python:3.13-alpine,python3.13-alpine
           - python:3.12-alpine,python3.12-alpine
@@ -279,7 +282,9 @@ jobs:
         with:
           images: |
             ${{ env.UV_GHCR_IMAGE }}
-            ${{ env.UV_DOCKERHUB_IMAGE }}
+            # We are temporarily not publishing the extra images to DockerHub
+            # TODO(zanieb): Restore DockerHub support. See also, "Add annotations to images".
+            # ${{ env.UV_DOCKERHUB_IMAGE }}
           flavor: |
             latest=false
           tags: |
@@ -287,7 +292,7 @@ jobs:
 
       - name: Build and push
         id: build-and-push
-        uses: depot/build-push-action@0781b3393f28b17fe7982ea3fabe715825b35fad # v1.16.1
+        uses: depot/build-push-action@9785b135c3c76c33db102e45be96a25ab55cd507 # v1.16.2
         with:
           context: .
           project: 7hd4vdzmw5 # astral-sh/uv
@@ -310,7 +315,9 @@ jobs:
       - name: Add annotations to images
         if: ${{ needs.docker-plan.outputs.push == 'true' }}
         env:
-          IMAGES: "${{ env.UV_GHCR_IMAGE }} ${{ env.UV_DOCKERHUB_IMAGE }}"
+          IMAGES: "${{ env.UV_GHCR_IMAGE }}"
+          # TODO(zanieb): Restore DockerHub support.
+          # IMAGES: "${{ env.UV_GHCR_IMAGE }} ${{ env.UV_DOCKERHUB_IMAGE }}"
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
           ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
