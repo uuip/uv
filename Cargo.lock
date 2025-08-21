@@ -5043,6 +5043,7 @@ dependencies = [
  "unicode-width 0.2.1",
  "url",
  "uv-auth",
+ "uv-bin-install",
  "uv-build-backend",
  "uv-build-frontend",
  "uv-cache",
@@ -5155,6 +5156,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-bin-install"
+version = "0.0.1"
+dependencies = [
+ "fs-err",
+ "futures",
+ "reqwest",
+ "reqwest-middleware",
+ "reqwest-retry",
+ "tempfile",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uv-cache",
+ "uv-client",
+ "uv-distribution-filename",
+ "uv-extract",
+ "uv-pep440",
+ "uv-platform",
+]
+
+[[package]]
 name = "uv-build"
 version = "0.8.12"
 dependencies = [
@@ -5167,6 +5191,7 @@ dependencies = [
 name = "uv-build-backend"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "csv",
  "flate2",
  "fs-err",
