@@ -143,7 +143,7 @@ uv run [OPTIONS] [COMMAND]
 <p>Usually, the project environment is reused for performance. This option forces a fresh environment to be used for the project, enforcing strict isolation between dependencies and declaration of requirements.</p>
 <p>An editable installation is still used for the project.</p>
 <p>When used with <code>--with</code> or <code>--with-requirements</code>, the additional dependencies will still be layered in a second environment.</p>
-</dd><dt id="uv-run--keyring-provider"><a href="#uv-run--keyring-provider"><code>--keyring-provider</code></a> <i>keyring-provider</i></dt><dd><p>Attempt to use <code>keyring</code> for authentication for index URLs.</p>
+<p>May also be set with the <code>UV_ISOLATED</code> environment variable.</p></dd><dt id="uv-run--keyring-provider"><a href="#uv-run--keyring-provider"><code>--keyring-provider</code></a> <i>keyring-provider</i></dt><dd><p>Attempt to use <code>keyring</code> for authentication for index URLs.</p>
 <p>At present, only <code>--keyring-provider subprocess</code> is supported, which configures uv to use the <code>keyring</code> CLI to handle authentication.</p>
 <p>Defaults to <code>disabled</code>.</p>
 <p>May also be set with the <code>UV_KEYRING_PROVIDER</code> environment variable.</p><p>Possible values:</p>
@@ -1850,7 +1850,7 @@ Formats Python code using the Ruff formatter. By default, all Python files in th
 
 To check if files are formatted without modifying them, use `--check`. To see a diff of formatting changes, use `--diff`.
 
-By default, Additional arguments can be passed to Ruff after `--`.
+Additional arguments can be passed to Ruff after `--`.
 
 <h3 class="cli-reference">Usage</h3>
 
@@ -2034,7 +2034,7 @@ uv tool run [OPTIONS] [COMMAND]
 <p>Accepts either a repository compliant with PEP 503 (the simple repository API), or a local directory laid out in the same format.</p>
 <p>The index given by this flag is given lower priority than all other indexes specified via the <code>--extra-index-url</code> flag.</p>
 <p>May also be set with the <code>UV_INDEX_URL</code> environment variable.</p></dd><dt id="uv-tool-run--isolated"><a href="#uv-tool-run--isolated"><code>--isolated</code></a></dt><dd><p>Run the tool in an isolated virtual environment, ignoring any already-installed tools</p>
-</dd><dt id="uv-tool-run--keyring-provider"><a href="#uv-tool-run--keyring-provider"><code>--keyring-provider</code></a> <i>keyring-provider</i></dt><dd><p>Attempt to use <code>keyring</code> for authentication for index URLs.</p>
+<p>May also be set with the <code>UV_ISOLATED</code> environment variable.</p></dd><dt id="uv-tool-run--keyring-provider"><a href="#uv-tool-run--keyring-provider"><code>--keyring-provider</code></a> <i>keyring-provider</i></dt><dd><p>Attempt to use <code>keyring</code> for authentication for index URLs.</p>
 <p>At present, only <code>--keyring-provider subprocess</code> is supported, which configures uv to use the <code>keyring</code> CLI to handle authentication.</p>
 <p>Defaults to <code>disabled</code>.</p>
 <p>May also be set with the <code>UV_KEYRING_PROVIDER</code> environment variable.</p><p>Possible values:</p>
@@ -3701,6 +3701,7 @@ by <code>--python-version</code>.</p>
 <ul>
 <li><code>auto</code>:  Select the appropriate PyTorch index based on the operating system and CUDA driver version</li>
 <li><code>cpu</code>:  Use the CPU-only PyTorch index</li>
+<li><code>cu129</code>:  Use the PyTorch index for CUDA 12.9</li>
 <li><code>cu128</code>:  Use the PyTorch index for CUDA 12.8</li>
 <li><code>cu126</code>:  Use the PyTorch index for CUDA 12.6</li>
 <li><code>cu125</code>:  Use the PyTorch index for CUDA 12.5</li>
@@ -3973,6 +3974,7 @@ be used with caution, as it can modify the system Python installation.</p>
 <ul>
 <li><code>auto</code>:  Select the appropriate PyTorch index based on the operating system and CUDA driver version</li>
 <li><code>cpu</code>:  Use the CPU-only PyTorch index</li>
+<li><code>cu129</code>:  Use the PyTorch index for CUDA 12.9</li>
 <li><code>cu128</code>:  Use the PyTorch index for CUDA 12.8</li>
 <li><code>cu126</code>:  Use the PyTorch index for CUDA 12.6</li>
 <li><code>cu125</code>:  Use the PyTorch index for CUDA 12.5</li>
@@ -4271,6 +4273,7 @@ should be used with caution, as it can modify the system Python installation.</p
 <ul>
 <li><code>auto</code>:  Select the appropriate PyTorch index based on the operating system and CUDA driver version</li>
 <li><code>cpu</code>:  Use the CPU-only PyTorch index</li>
+<li><code>cu129</code>:  Use the PyTorch index for CUDA 12.9</li>
 <li><code>cu128</code>:  Use the PyTorch index for CUDA 12.8</li>
 <li><code>cu126</code>:  Use the PyTorch index for CUDA 12.6</li>
 <li><code>cu125</code>:  Use the PyTorch index for CUDA 12.5</li>

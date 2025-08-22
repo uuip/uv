@@ -4986,7 +4986,7 @@ dependencies = [
 
 [[package]]
 name = "uv"
-version = "0.8.12"
+version = "0.8.13"
 dependencies = [
  "anstream",
  "anyhow",
@@ -5180,7 +5180,7 @@ dependencies = [
 
 [[package]]
 name = "uv-build"
-version = "0.8.12"
+version = "0.8.13"
 dependencies = [
  "anyhow",
  "uv-build-backend",
@@ -6248,6 +6248,7 @@ dependencies = [
  "url",
  "uv-configuration",
  "uv-distribution-types",
+ "uv-normalize",
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
@@ -6352,6 +6353,7 @@ dependencies = [
  "uv-fs",
  "uv-install-wheel",
  "uv-installer",
+ "uv-normalize",
  "uv-pep440",
  "uv-pep508",
  "uv-pypi-types",
@@ -6411,7 +6413,6 @@ dependencies = [
  "uv-normalize",
  "uv-once-map",
  "uv-pep440",
- "uv-pep508",
  "uv-pypi-types",
  "uv-python",
  "uv-redacted",
@@ -6420,7 +6421,7 @@ dependencies = [
 
 [[package]]
 name = "uv-version"
-version = "0.8.12"
+version = "0.8.13"
 
 [[package]]
 name = "uv-virtualenv"
