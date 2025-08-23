@@ -1978,6 +1978,7 @@ async fn run_project(
                 args.no_sync,
                 args.no_install_project,
                 args.no_install_workspace,
+                args.no_install_local,
                 requirements,
                 constraints,
                 args.marker,
@@ -2193,6 +2194,7 @@ async fn run_project(
             let cache = cache.init()?;
 
             Box::pin(commands::format(
+                project_dir,
                 args.check,
                 args.diff,
                 args.extra_args,
