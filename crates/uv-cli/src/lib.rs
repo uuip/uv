@@ -4418,7 +4418,7 @@ pub enum AuthCommand {
     ///
     /// Credentials are only stored in this directory when the plaintext backend is used, as
     /// opposed to the native backend, which uses the system keyring.
-    Dir,
+    Dir(AuthDirArgs),
 }
 
 #[derive(Args)]
@@ -5611,6 +5611,12 @@ pub struct AuthTokenArgs {
 }
 
 #[derive(Args)]
+pub struct AuthDirArgs {
+    /// The service to lookup.
+    pub service: Option<Service>,
+}
+
+#[derive(Args)]
 pub struct GenerateShellCompletionArgs {
     /// The shell to generate the completion script for
     pub shell: clap_complete_command::Shell,
@@ -6572,6 +6578,13 @@ pub struct PublishArgs {
 
     #[arg(long, hide = true)]
     pub skip_existing: bool,
+
+    /// Perform a dry run without uploading files.
+    ///
+    /// When enabled, the command will check for existing files if `--check-url` is provided,
+    /// and will perform validation against the index if supported, but will not upload any files.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// See [PEP 517](https://peps.python.org/pep-0517/) and
