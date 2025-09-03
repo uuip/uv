@@ -24,9 +24,9 @@ use uv_cache_info::Timestamp;
 #[cfg(feature = "self-update")]
 use uv_cli::SelfUpdateArgs;
 use uv_cli::{
-    BuildBackendCommand, CacheCommand, CacheNamespace, Cli, Commands, PipCommand, PipNamespace,
-    ProjectCommand, PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand,
-    ToolNamespace, TopLevelArgs, compat::CompatArgs,
+    AuthCommand, AuthNamespace, BuildBackendCommand, CacheCommand, CacheNamespace, Cli, Commands,
+    PipCommand, PipNamespace, ProjectCommand, PythonCommand, PythonNamespace, SelfCommand,
+    SelfNamespace, ToolCommand, ToolNamespace, TopLevelArgs, compat::CompatArgs,
 };
 use uv_client::BaseClientBuilder;
 use uv_configuration::min_stack_size;
@@ -439,6 +439,74 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
     .retries_from_env()?;
 
     match *cli.command {
+        Commands::Auth(AuthNamespace {
+            command: AuthCommand::Login(args),
+        }) => {
+            // Resolve the settings from the command-line arguments and workspace configuration.
+            let args = settings::AuthLoginSettings::resolve(
+                args,
+                &cli.top_level.global_args,
+                filesystem.as_ref(),
+            );
+            show_settings!(args);
+
+            commands::auth_login(
+                args.service,
+                args.username,
+                args.password,
+                args.token,
+                &args.network_settings,
+                printer,
+                globals.preview,
+            )
+            .await
+        }
+        Commands::Auth(AuthNamespace {
+            command: AuthCommand::Logout(args),
+        }) => {
+            // Resolve the settings from the command-line arguments and workspace configuration.
+            let args = settings::AuthLogoutSettings::resolve(
+                args,
+                &cli.top_level.global_args,
+                filesystem.as_ref(),
+            );
+            show_settings!(args);
+
+            commands::auth_logout(
+                args.service,
+                args.username,
+                &args.network_settings,
+                printer,
+                globals.preview,
+            )
+            .await
+        }
+        Commands::Auth(AuthNamespace {
+            command: AuthCommand::Token(args),
+        }) => {
+            // Resolve the settings from the command-line arguments and workspace configuration.
+            let args = settings::AuthTokenSettings::resolve(
+                args,
+                &cli.top_level.global_args,
+                filesystem.as_ref(),
+            );
+            show_settings!(args);
+
+            commands::auth_token(
+                args.service,
+                args.username,
+                &args.network_settings,
+                printer,
+                globals.preview,
+            )
+            .await
+        }
+        Commands::Auth(AuthNamespace {
+            command: AuthCommand::Dir,
+        }) => {
+            commands::auth_dir()?;
+            Ok(ExitStatus::Success)
+        }
         Commands::Help(args) => commands::help(
             args.command.unwrap_or_default().as_slice(),
             printer,

@@ -55,6 +55,10 @@ local `uv.toml` file to use as the configuration file.
 Equivalent to the `--constraint` command-line argument. If set, uv will use this
 file as the constraints file. Uses space-separated list of files.
 
+### `UV_CREDENTIALS_DIR`
+
+The directory for storage of credentials when using a plain text backend.
+
 ### `UV_CUSTOM_COMPILE_COMMAND`
 
 Equivalent to the `--custom-compile-command` command-line argument.
@@ -680,6 +684,26 @@ See [`PycInvalidationMode`](https://docs.python.org/3/library/py_compile.html#py
 ### `PYTHONPATH`
 
 Adds directories to Python module search path (e.g., `PYTHONPATH=/path/to/modules`).
+
+### `PYX_API_KEY`
+
+The pyx API key (e.g., `sk-pyx-...`).
+
+### `PYX_API_URL`
+
+The URL of the pyx Simple API server.
+
+### `PYX_AUTH_TOKEN`
+
+The pyx authentication token (e.g., `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...`), as output by `uv auth token`.
+
+### `PYX_CDN_DOMAIN`
+
+The domain of the pyx CDN.
+
+### `PYX_CREDENTIALS_DIR`
+
+Specifies the directory where uv stores pyx credentials.
 
 ### `RUST_BACKTRACE`
 

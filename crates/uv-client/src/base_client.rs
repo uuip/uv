@@ -28,12 +28,12 @@ use tracing::{debug, trace};
 use url::ParseError;
 use url::Url;
 
-use uv_auth::Credentials;
-use uv_auth::{AuthMiddleware, Indexes};
+use uv_auth::{AuthMiddleware, Credentials, Indexes, PyxTokenStore};
 use uv_configuration::{KeyringProviderType, TrustedHost};
 use uv_fs::Simplified;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
+use uv_preview::Preview;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_version::version;
@@ -69,6 +69,7 @@ pub enum AuthIntegration {
 #[derive(Debug, Clone)]
 pub struct BaseClientBuilder<'a> {
     keyring: KeyringProviderType,
+    preview: Preview,
     allow_insecure_host: Vec<TrustedHost>,
     native_tls: bool,
     built_in_root_certs: bool,
@@ -126,6 +127,7 @@ impl Default for BaseClientBuilder<'_> {
     fn default() -> Self {
         Self {
             keyring: KeyringProviderType::default(),
+            preview: Preview::default(),
             allow_insecure_host: vec![],
             native_tls: false,
             built_in_root_certs: false,
@@ -470,6 +472,30 @@ impl<'a> BaseClientBuilder<'a> {
     fn apply_middleware(&self, client: Client) -> ClientWithMiddleware {
         match self.connectivity {
             Connectivity::Online => {
+                // Create a base client to using in the authentication middleware.
+                let base_client = {
+                    let mut client = reqwest_middleware::ClientBuilder::new(client.clone());
+
+                    // Avoid uncloneable errors with a streaming body during publish.
+                    if self.retries > 0 {
+                        // Initialize the retry strategy.
+                        let retry_strategy = RetryTransientMiddleware::new_with_policy_and_strategy(
+                            self.retry_policy(),
+                            UvRetryableStrategy,
+                        );
+                        client = client.with(retry_strategy);
+                    }
+
+                    // When supplied, add the extra middleware.
+                    if let Some(extra_middleware) = &self.extra_middleware {
+                        for middleware in &extra_middleware.0 {
+                            client = client.with_arc(middleware.clone());
+                        }
+                    }
+
+                    client.build()
+                };
+
                 let mut client = reqwest_middleware::ClientBuilder::new(client);
 
                 // Avoid uncloneable errors with a streaming body during publish.
@@ -482,31 +508,40 @@ impl<'a> BaseClientBuilder<'a> {
                     client = client.with(retry_strategy);
                 }
 
+                // When supplied, add the extra middleware.
+                if let Some(extra_middleware) = &self.extra_middleware {
+                    for middleware in &extra_middleware.0 {
+                        client = client.with_arc(middleware.clone());
+                    }
+                }
+
                 // Initialize the authentication middleware to set headers.
                 match self.auth_integration {
                     AuthIntegration::Default => {
-                        let auth_middleware = AuthMiddleware::new()
+                        let mut auth_middleware = AuthMiddleware::new()
+                            .with_base_client(base_client)
                             .with_indexes(self.indexes.clone())
-                            .with_keyring(self.keyring.to_provider());
+                            .with_keyring(self.keyring.to_provider())
+                            .with_preview(self.preview);
+                        if let Ok(token_store) = PyxTokenStore::from_settings() {
+                            auth_middleware = auth_middleware.with_pyx_token_store(token_store);
+                        }
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::OnlyAuthenticated => {
-                        let auth_middleware = AuthMiddleware::new()
+                        let mut auth_middleware = AuthMiddleware::new()
+                            .with_base_client(base_client)
                             .with_indexes(self.indexes.clone())
                             .with_keyring(self.keyring.to_provider())
+                            .with_preview(self.preview)
                             .with_only_authenticated(true);
-
+                        if let Ok(token_store) = PyxTokenStore::from_settings() {
+                            auth_middleware = auth_middleware.with_pyx_token_store(token_store);
+                        }
                         client = client.with(auth_middleware);
                     }
                     AuthIntegration::NoAuthMiddleware => {
                         // The downstream code uses custom auth logic.
-                    }
-                }
-
-                // When supplied add the extra middleware
-                if let Some(extra_middleware) = &self.extra_middleware {
-                    for middleware in &extra_middleware.0 {
-                        client = client.with_arc(middleware.clone());
                     }
                 }
 
@@ -964,7 +999,7 @@ pub fn is_transient_network_error(err: &(dyn Error + 'static)) -> bool {
     let mut has_known_error = false;
     // IO Errors or reqwest errors may be nested through custom IO errors or stream processing
     // crates
-    let mut current_source = err.source();
+    let mut current_source = Some(err);
     while let Some(source) = current_source {
         if let Some(reqwest_err) = source.downcast_ref::<WrappedReqwestError>() {
             has_known_error = true;
@@ -1075,10 +1110,11 @@ pub fn retries_from_env() -> Result<u32, RetryParsingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
 
+    use anyhow::Result;
+    use insta::assert_debug_snapshot;
     use reqwest::{Client, Method};
-    use wiremock::matchers::method;
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::base_client::request_into_redirect;
@@ -1268,6 +1304,73 @@ mod tests {
 
             assert!(!redirect_request.headers().contains_key(REFERER));
         }
+
+        Ok(())
+    }
+
+    /// Enumerate which status codes we are retrying.
+    #[tokio::test]
+    async fn retried_status_codes() -> Result<()> {
+        let server = MockServer::start().await;
+        let client = Client::default();
+        let middleware_client = ClientWithMiddleware::default();
+        let mut retried = Vec::new();
+        for status in 100..599 {
+            // Test all standard status codes and and example for a non-RFC code used in the wild.
+            if StatusCode::from_u16(status)?.canonical_reason().is_none() && status != 420 {
+                continue;
+            }
+
+            Mock::given(path(format!("/{status}")))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+
+            let response = middleware_client
+                .get(format!("{}/{}", server.uri(), status))
+                .send()
+                .await;
+
+            let middleware_retry =
+                DefaultRetryableStrategy.handle(&response) == Some(Retryable::Transient);
+
+            let response = client
+                .get(format!("{}/{}", server.uri(), status))
+                .send()
+                .await?;
+
+            let uv_retry = match response.error_for_status() {
+                Ok(_) => false,
+                Err(err) => is_transient_network_error(&err),
+            };
+
+            // Ensure we're retrying the same status code as the reqwest_retry crate. We may choose
+            // to deviate from this later.
+            assert_eq!(middleware_retry, uv_retry);
+            if uv_retry {
+                retried.push(status);
+            }
+        }
+
+        assert_debug_snapshot!(retried, @r"
+        [
+            100,
+            102,
+            408,
+            429,
+            500,
+            501,
+            502,
+            503,
+            504,
+            505,
+            506,
+            507,
+            508,
+            510,
+            511,
+        ]
+        ");
 
         Ok(())
     }

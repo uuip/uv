@@ -8,6 +8,7 @@ use clap::builder::Styles;
 use clap::builder::styling::{AnsiColor, Effects, Style};
 use clap::{Args, Parser, Subcommand};
 
+use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::{
     ExportFormat, IndexStrategy, KeyringProviderType, PackageNameSpecifier, ProjectBuildBackend,
@@ -399,6 +400,13 @@ impl From<ColorChoice> for anstream::ColorChoice {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
+    /// Manage authentication.
+    #[command(
+        after_help = "Use `uv help auth` for more details.",
+        after_long_help = ""
+    )]
+    Auth(AuthNamespace),
+
     /// Manage Python projects.
     #[command(flatten)]
     Project(Box<ProjectCommand>),
@@ -4387,6 +4395,33 @@ pub struct FormatArgs {
 }
 
 #[derive(Args)]
+pub struct AuthNamespace {
+    #[command(subcommand)]
+    pub command: AuthCommand,
+}
+
+#[derive(Subcommand)]
+pub enum AuthCommand {
+    /// Login to a service
+    Login(AuthLoginArgs),
+    /// Logout of a service
+    Logout(AuthLogoutArgs),
+    /// Show the authentication token for a service
+    Token(AuthTokenArgs),
+    /// Show the path to the uv credentials directory.
+    ///
+    /// By default, credentials are stored in the uv data directory at
+    /// `$XDG_DATA_HOME/uv/credentials` or `$HOME/.local/share/uv/credentials` on Unix and
+    /// `%APPDATA%\uv\data\credentials` on Windows.
+    ///
+    /// The credentials directory may be overridden with `$UV_CREDENTIALS_DIR`.
+    ///
+    /// Credentials are only stored in this directory when the plaintext backend is used, as
+    /// opposed to the native backend, which uses the system keyring.
+    Dir,
+}
+
+#[derive(Args)]
 pub struct ToolNamespace {
     #[command(subcommand)]
     pub command: ToolCommand,
@@ -5499,6 +5534,80 @@ pub struct PythonPinArgs {
     /// Remove the Python version pin.
     #[arg(long, conflicts_with = "request", conflicts_with = "resolved")]
     pub rm: bool,
+}
+
+#[derive(Args)]
+pub struct AuthLogoutArgs {
+    /// The service to logout of.
+    pub service: Service,
+
+    /// The username to logout.
+    #[arg(long, short)]
+    pub username: Option<String>,
+
+    /// The keyring provider to use for storage of credentials.
+    ///
+    /// Only `--keyring-provider native` is supported for `logout`, which uses the system keyring
+    /// via an integration built into uv.
+    #[arg(
+        long,
+        value_enum,
+        env = EnvVars::UV_KEYRING_PROVIDER,
+    )]
+    pub keyring_provider: Option<KeyringProviderType>,
+}
+
+#[derive(Args)]
+pub struct AuthLoginArgs {
+    /// The service to log into.
+    pub service: Service,
+
+    /// The username to use for the service.
+    #[arg(long, short, conflicts_with = "token")]
+    pub username: Option<String>,
+
+    /// The password to use for the service.
+    ///
+    /// Use `-` to read the password from stdin.
+    #[arg(long, conflicts_with = "token")]
+    pub password: Option<String>,
+
+    /// The token to use for the service.
+    ///
+    /// The username will be set to `__token__`.
+    ///
+    /// Use `-` to read the token from stdin.
+    #[arg(long, short, conflicts_with = "username", conflicts_with = "password")]
+    pub token: Option<String>,
+
+    /// The keyring provider to use for storage of credentials.
+    ///
+    /// Only `--keyring-provider native` is supported for `login`, which uses the system keyring via
+    /// an integration built into uv.
+    #[arg(
+        long,
+        value_enum,
+        env = EnvVars::UV_KEYRING_PROVIDER,
+    )]
+    pub keyring_provider: Option<KeyringProviderType>,
+}
+
+#[derive(Args)]
+pub struct AuthTokenArgs {
+    /// The service to lookup.
+    pub service: Service,
+
+    /// The username to lookup.
+    #[arg(long, short)]
+    pub username: Option<String>,
+
+    /// The keyring provider to use for reading credentials.
+    #[arg(
+        long,
+        value_enum,
+        env = EnvVars::UV_KEYRING_PROVIDER,
+    )]
+    pub keyring_provider: Option<KeyringProviderType>,
 }
 
 #[derive(Args)]
