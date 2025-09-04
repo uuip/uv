@@ -1446,8 +1446,14 @@ pub struct PipCompileArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     #[arg(long)]
     pub python_platform: Option<TargetTriple>,
 
@@ -1772,8 +1778,14 @@ pub struct PipSyncArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -2075,8 +2087,14 @@ pub struct PipInstallArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -2398,8 +2416,14 @@ pub struct PipCheckArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     #[arg(long)]
     pub python_platform: Option<TargetTriple>,
 }
@@ -3323,8 +3347,14 @@ pub struct RunArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -3600,8 +3630,14 @@ pub struct SyncArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -4623,8 +4659,14 @@ pub struct ToolRunArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -4745,8 +4787,14 @@ pub struct ToolInstallArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -4842,8 +4890,14 @@ pub struct ToolUpgradeArgs {
     /// its CPU, vendor, and operating system name, like `x86_64-unknown-linux-gnu` or
     /// `aarch64-apple-darwin`.
     ///
-    /// When targeting macOS (Darwin), the default minimum version is `12.0`. Use
-    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `13.0`.
+    /// When targeting macOS (Darwin), the default minimum version is `13.0`. Use
+    /// `MACOSX_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting iOS, the default minimum version is `13.0`. Use
+    /// `IPHONEOS_DEPLOYMENT_TARGET` to specify a different minimum version, e.g., `14.0`.
+    ///
+    /// When targeting Android, the default minimum Android API level is `24`. Use
+    /// `ANDROID_API_LEVEL` to specify a different minimum version, e.g., `26`.
     ///
     /// WARNING: When specified, uv will select wheels that are compatible with the _target_
     /// platform; as a result, the installed distributions may not be compatible with the _current_
@@ -5538,7 +5592,7 @@ pub struct PythonPinArgs {
 
 #[derive(Args)]
 pub struct AuthLogoutArgs {
-    /// The service to logout of.
+    /// The domain or URL of the service to logout from.
     pub service: Service,
 
     /// The username to logout.
@@ -5559,7 +5613,7 @@ pub struct AuthLogoutArgs {
 
 #[derive(Args)]
 pub struct AuthLoginArgs {
-    /// The service to log into.
+    /// The domain or URL of the service to log into.
     pub service: Service,
 
     /// The username to use for the service.
@@ -5594,7 +5648,7 @@ pub struct AuthLoginArgs {
 
 #[derive(Args)]
 pub struct AuthTokenArgs {
-    /// The service to lookup.
+    /// The domain or URL of the service to lookup.
     pub service: Service,
 
     /// The username to lookup.
@@ -5612,7 +5666,7 @@ pub struct AuthTokenArgs {
 
 #[derive(Args)]
 pub struct AuthDirArgs {
-    /// The service to lookup.
+    /// The domain or URL of the service to lookup.
     pub service: Option<Service>,
 }
 

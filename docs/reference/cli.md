@@ -64,7 +64,7 @@ uv auth login [OPTIONS] <SERVICE>
 
 <h3 class="cli-reference">Arguments</h3>
 
-<dl class="cli-reference"><dt id="uv-auth-login--service"><a href="#uv-auth-login--service"<code>SERVICE</code></a></dt><dd><p>The service to log into</p>
+<dl class="cli-reference"><dt id="uv-auth-login--service"><a href="#uv-auth-login--service"<code>SERVICE</code></a></dt><dd><p>The domain or URL of the service to log into</p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>
@@ -139,7 +139,7 @@ uv auth logout [OPTIONS] <SERVICE>
 
 <h3 class="cli-reference">Arguments</h3>
 
-<dl class="cli-reference"><dt id="uv-auth-logout--service"><a href="#uv-auth-logout--service"<code>SERVICE</code></a></dt><dd><p>The service to logout of</p>
+<dl class="cli-reference"><dt id="uv-auth-logout--service"><a href="#uv-auth-logout--service"<code>SERVICE</code></a></dt><dd><p>The domain or URL of the service to logout from</p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>
@@ -209,7 +209,7 @@ uv auth token [OPTIONS] <SERVICE>
 
 <h3 class="cli-reference">Arguments</h3>
 
-<dl class="cli-reference"><dt id="uv-auth-token--service"><a href="#uv-auth-token--service"<code>SERVICE</code></a></dt><dd><p>The service to lookup</p>
+<dl class="cli-reference"><dt id="uv-auth-token--service"><a href="#uv-auth-token--service"<code>SERVICE</code></a></dt><dd><p>The domain or URL of the service to lookup</p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>
@@ -284,7 +284,7 @@ uv auth dir [OPTIONS] [SERVICE]
 
 <h3 class="cli-reference">Arguments</h3>
 
-<dl class="cli-reference"><dt id="uv-auth-dir--service"><a href="#uv-auth-dir--service"<code>SERVICE</code></a></dt><dd><p>The service to lookup</p>
+<dl class="cli-reference"><dt id="uv-auth-dir--service"><a href="#uv-auth-dir--service"<code>SERVICE</code></a></dt><dd><p>The domain or URL of the service to lookup</p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>
@@ -537,7 +537,9 @@ used.</p>
 <p>See <a href="#uv-python">uv python</a> to view supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-run--python-platform"><a href="#uv-run--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -580,7 +582,12 @@ used.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-run--quiet"><a href="#uv-run--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
 <p>Repeating this option, e.g., <code>-qq</code>, will enable a silent mode in which uv will write no output to stdout.</p>
 </dd><dt id="uv-run--refresh"><a href="#uv-run--refresh"><code>--refresh</code></a></dt><dd><p>Refresh all cached data</p>
@@ -1530,7 +1537,9 @@ environment in the project.</p>
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-sync--python-platform"><a href="#uv-sync--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -1573,7 +1582,12 @@ environment in the project.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-sync--quiet"><a href="#uv-sync--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
 <p>Repeating this option, e.g., <code>-qq</code>, will enable a silent mode in which uv will write no output to stdout.</p>
 </dd><dt id="uv-sync--refresh"><a href="#uv-sync--refresh"><code>--refresh</code></a></dt><dd><p>Refresh all cached data</p>
@@ -2174,7 +2188,12 @@ interpreter. Use <code>--universal</code> to display the tree for all platforms,
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-tree--python-version"><a href="#uv-tree--python-version"><code>--python-version</code></a> <i>python-version</i></dt><dd><p>The Python version to use when filtering the tree.</p>
 <p>For example, pass <code>--python-version 3.10</code> to display the dependencies that would be included when installing on Python 3.10.</p>
 <p>Defaults to the version of the discovered Python interpreter.</p>
@@ -2456,7 +2475,9 @@ uv tool run [OPTIONS] [COMMAND]
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-tool-run--python-platform"><a href="#uv-tool-run--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -2499,7 +2520,12 @@ uv tool run [OPTIONS] [COMMAND]
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-tool-run--quiet"><a href="#uv-tool-run--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
 <p>Repeating this option, e.g., <code>-qq</code>, will enable a silent mode in which uv will write no output to stdout.</p>
 </dd><dt id="uv-tool-run--refresh"><a href="#uv-tool-run--refresh"><code>--refresh</code></a></dt><dd><p>Refresh all cached data</p>
@@ -2676,7 +2702,9 @@ uv tool install [OPTIONS] <PACKAGE>
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-tool-install--python-platform"><a href="#uv-tool-install--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -2719,7 +2747,12 @@ uv tool install [OPTIONS] <PACKAGE>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-tool-install--quiet"><a href="#uv-tool-install--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
 <p>Repeating this option, e.g., <code>-qq</code>, will enable a silent mode in which uv will write no output to stdout.</p>
 </dd><dt id="uv-tool-install--refresh"><a href="#uv-tool-install--refresh"><code>--refresh</code></a></dt><dd><p>Refresh all cached data</p>
@@ -2887,7 +2920,9 @@ Use with <code>--all</code> to apply to all tools.</p>
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-tool-upgrade--python-platform"><a href="#uv-tool-upgrade--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -2930,7 +2965,12 @@ Use with <code>--all</code> to apply to all tools.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-tool-upgrade--quiet"><a href="#uv-tool-upgrade--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
 <p>Repeating this option, e.g., <code>-qq</code>, will enable a silent mode in which uv will write no output to stdout.</p>
 </dd><dt id="uv-tool-upgrade--reinstall"><a href="#uv-tool-upgrade--reinstall"><code>--reinstall</code></a>, <code>--force-reinstall</code></dt><dd><p>Reinstall all packages, regardless of whether they're already installed. Implies <code>--refresh</code></p>
@@ -4127,7 +4167,9 @@ by <code>--python-version</code>.</p>
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 </dd><dt id="uv-pip-compile--python-platform"><a href="#uv-pip-compile--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be resolved.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>Possible values:</p>
 <ul>
 <li><code>windows</code>:  An alias for <code>x86_64-pc-windows-msvc</code>, the default target for Windows</li>
@@ -4169,7 +4211,12 @@ by <code>--python-version</code>.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-pip-compile--python-version"><a href="#uv-pip-compile--python-version"><code>--python-version</code></a> <i>python-version</i></dt><dd><p>The Python version to use for resolution.</p>
 <p>For example, <code>3.8</code> or <code>3.8.17</code>.</p>
 <p>Defaults to the version of the Python interpreter used for resolution.</p>
@@ -4398,7 +4445,9 @@ be used with caution, as it can modify the system Python installation.</p>
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-pip-sync--python-platform"><a href="#uv-pip-sync--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -4441,7 +4490,12 @@ be used with caution, as it can modify the system Python installation.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-pip-sync--python-version"><a href="#uv-pip-sync--python-version"><code>--python-version</code></a> <i>python-version</i></dt><dd><p>The minimum Python version that should be supported by the requirements (e.g., <code>3.7</code> or <code>3.7.9</code>).</p>
 <p>If a patch version is omitted, the minimum patch version is assumed. For example, <code>3.7</code> is mapped to <code>3.7.0</code>.</p>
 </dd><dt id="uv-pip-sync--quiet"><a href="#uv-pip-sync--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
@@ -4688,7 +4742,9 @@ should be used with caution, as it can modify the system Python installation.</p
 <p>See <a href="#uv-python">uv python</a> for details on Python discovery and supported request formats.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-pip-install--python-platform"><a href="#uv-pip-install--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which requirements should be installed.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>WARNING: When specified, uv will select wheels that are compatible with the <em>target</em> platform; as a result, the installed distributions may not be compatible with the <em>current</em> platform. Conversely, any distributions that are built from source may be incompatible with the <em>target</em> platform, as they will be built for the <em>current</em> platform. The <code>--python-platform</code> option is intended for advanced use cases.</p>
 <p>Possible values:</p>
 <ul>
@@ -4731,7 +4787,12 @@ should be used with caution, as it can modify the system Python installation.</p
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-pip-install--python-version"><a href="#uv-pip-install--python-version"><code>--python-version</code></a> <i>python-version</i></dt><dd><p>The minimum Python version that should be supported by the requirements (e.g., <code>3.7</code> or <code>3.7.9</code>).</p>
 <p>If a patch version is omitted, the minimum patch version is assumed. For example, <code>3.7</code> is mapped to <code>3.7.0</code>.</p>
 </dd><dt id="uv-pip-install--quiet"><a href="#uv-pip-install--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>
@@ -5319,7 +5380,9 @@ Python environment if no virtual environment is found.</p>
 <p>May also be set with the <code>UV_PYTHON</code> environment variable.</p></dd><dt id="uv-pip-check--python-platform"><a href="#uv-pip-check--python-platform"><code>--python-platform</code></a> <i>python-platform</i></dt><dd><p>The platform for which packages should be checked.</p>
 <p>By default, the installed packages are checked against the platform of the current interpreter.</p>
 <p>Represented as a &quot;target triple&quot;, a string that describes the target platform in terms of its CPU, vendor, and operating system name, like <code>x86_64-unknown-linux-gnu</code> or <code>aarch64-apple-darwin</code>.</p>
-<p>When targeting macOS (Darwin), the default minimum version is <code>12.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>13.0</code>.</p>
+<p>When targeting macOS (Darwin), the default minimum version is <code>13.0</code>. Use <code>MACOSX_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting iOS, the default minimum version is <code>13.0</code>. Use <code>IPHONEOS_DEPLOYMENT_TARGET</code> to specify a different minimum version, e.g., <code>14.0</code>.</p>
+<p>When targeting Android, the default minimum Android API level is <code>24</code>. Use <code>ANDROID_API_LEVEL</code> to specify a different minimum version, e.g., <code>26</code>.</p>
 <p>Possible values:</p>
 <ul>
 <li><code>windows</code>:  An alias for <code>x86_64-pc-windows-msvc</code>, the default target for Windows</li>
@@ -5361,7 +5424,12 @@ Python environment if no virtual environment is found.</p>
 <li><code>aarch64-manylinux_2_38</code>:  An ARM64 target for the <code>manylinux_2_38</code> platform</li>
 <li><code>aarch64-manylinux_2_39</code>:  An ARM64 target for the <code>manylinux_2_39</code> platform</li>
 <li><code>aarch64-manylinux_2_40</code>:  An ARM64 target for the <code>manylinux_2_40</code> platform</li>
+<li><code>aarch64-linux-android</code>:  An ARM64 Android target</li>
+<li><code>x86_64-linux-android</code>:  An <code>x86_64</code> Android target</li>
 <li><code>wasm32-pyodide2024</code>:  A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12</li>
+<li><code>arm64-apple-ios</code>:  An ARM64 target for iOS device</li>
+<li><code>arm64-apple-ios-simulator</code>:  An ARM64 target for iOS simulator</li>
+<li><code>x86_64-apple-ios-simulator</code>:  An <code>x86_64</code> target for iOS simulator</li>
 </ul></dd><dt id="uv-pip-check--python-version"><a href="#uv-pip-check--python-version"><code>--python-version</code></a> <i>python-version</i></dt><dd><p>The Python version against which packages should be checked.</p>
 <p>By default, the installed packages are checked against the version of the current interpreter.</p>
 </dd><dt id="uv-pip-check--quiet"><a href="#uv-pip-check--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output.</p>

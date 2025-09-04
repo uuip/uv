@@ -238,9 +238,49 @@ pub enum TargetTriple {
     #[serde(alias = "aarch64-manylinux240")]
     Aarch64Manylinux240,
 
+    /// An ARM64 Android target.
+    ///
+    /// By default uses Android API level 24, but respects
+    /// the `ANDROID_API_LEVEL` environment variable if set.
+    #[cfg_attr(feature = "clap", value(name = "aarch64-linux-android"))]
+    #[serde(rename = "aarch64-linux-android")]
+    Aarch64LinuxAndroid,
+
+    /// An `x86_64` Android target.
+    ///
+    /// By default uses Android API level 24, but respects
+    /// the `ANDROID_API_LEVEL` environment variable if set.
+    #[cfg_attr(feature = "clap", value(name = "x86_64-linux-android"))]
+    #[serde(rename = "x86_64-linux-android")]
+    X8664LinuxAndroid,
+
     /// A wasm32 target using the Pyodide 2024 platform. Meant for use with Python 3.12.
     #[cfg_attr(feature = "clap", value(name = "wasm32-pyodide2024"))]
     Wasm32Pyodide2024,
+
+    /// An ARM64 target for iOS device
+    ///
+    /// By default, iOS 13.0 is used, but respects the `IPHONEOS_DEPLOYMENT_TARGET`
+    /// environment variable if set.
+    #[cfg_attr(feature = "clap", value(name = "arm64-apple-ios"))]
+    #[serde(rename = "arm64-apple-ios")]
+    Arm64Ios,
+
+    /// An ARM64 target for iOS simulator
+    ///
+    /// By default, iOS 13.0 is used, but respects the `IPHONEOS_DEPLOYMENT_TARGET`
+    /// environment variable if set.
+    #[cfg_attr(feature = "clap", value(name = "arm64-apple-ios-simulator"))]
+    #[serde(rename = "arm64-apple-ios-simulator")]
+    Arm64IosSimulator,
+
+    /// An `x86_64` target for iOS simulator
+    ///
+    /// By default, iOS 13.0 is used, but respects the `IPHONEOS_DEPLOYMENT_TARGET`
+    /// environment variable if set.
+    #[cfg_attr(feature = "clap", value(name = "x86_64-apple-ios-simulator"))]
+    #[serde(rename = "x86_64-apple-ios-simulator")]
+    X8664IosSimulator,
 }
 
 impl TargetTriple {
@@ -480,6 +520,62 @@ impl TargetTriple {
                 },
                 Arch::Wasm32,
             ),
+            Self::Aarch64LinuxAndroid => {
+                let api_level = android_api_level().map_or(24, |api_level| {
+                    debug!("Found Android API level: {}", api_level);
+                    api_level
+                });
+                Platform::new(Os::Android { api_level }, Arch::Aarch64)
+            }
+            Self::X8664LinuxAndroid => {
+                let api_level = android_api_level().map_or(24, |api_level| {
+                    debug!("Found Android API level: {}", api_level);
+                    api_level
+                });
+                Platform::new(Os::Android { api_level }, Arch::X86_64)
+            }
+            Self::Arm64Ios => {
+                let (major, minor) = ios_deployment_target().map_or((13, 0), |(major, minor)| {
+                    debug!("Found iOS deployment target: {}.{}", major, minor);
+                    (major, minor)
+                });
+                Platform::new(
+                    Os::Ios {
+                        major,
+                        minor,
+                        simulator: false,
+                    },
+                    Arch::Aarch64,
+                )
+            }
+            Self::Arm64IosSimulator => {
+                let (major, minor) = ios_deployment_target().map_or((13, 0), |(major, minor)| {
+                    debug!("Found iOS deployment target: {}.{}", major, minor);
+                    (major, minor)
+                });
+                Platform::new(
+                    Os::Ios {
+                        major,
+                        minor,
+                        simulator: true,
+                    },
+                    Arch::Aarch64,
+                )
+            }
+            Self::X8664IosSimulator => {
+                let (major, minor) = ios_deployment_target().map_or((13, 0), |(major, minor)| {
+                    debug!("Found iOS deployment target: {}.{}", major, minor);
+                    (major, minor)
+                });
+                Platform::new(
+                    Os::Ios {
+                        major,
+                        minor,
+                        simulator: true,
+                    },
+                    Arch::X86_64,
+                )
+            }
         }
     }
 
@@ -522,7 +618,12 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "aarch64",
             Self::Aarch64Manylinux239 => "aarch64",
             Self::Aarch64Manylinux240 => "aarch64",
+            Self::Aarch64LinuxAndroid => "aarch64",
+            Self::X8664LinuxAndroid => "x86_64",
             Self::Wasm32Pyodide2024 => "wasm32",
+            Self::Arm64Ios => "arm64",
+            Self::Arm64IosSimulator => "arm64",
+            Self::X8664IosSimulator => "x86_64",
         }
     }
 
@@ -565,7 +666,12 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "Linux",
             Self::Aarch64Manylinux239 => "Linux",
             Self::Aarch64Manylinux240 => "Linux",
+            Self::Aarch64LinuxAndroid => "Android",
+            Self::X8664LinuxAndroid => "Android",
             Self::Wasm32Pyodide2024 => "Emscripten",
+            Self::Arm64Ios => "iOS",
+            Self::Arm64IosSimulator => "iOS",
+            Self::X8664IosSimulator => "iOS",
         }
     }
 
@@ -608,10 +714,15 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "",
             Self::Aarch64Manylinux239 => "",
             Self::Aarch64Manylinux240 => "",
+            Self::Aarch64LinuxAndroid => "",
+            Self::X8664LinuxAndroid => "",
             // This is the value Emscripten gives for its version:
             // https://github.com/emscripten-core/emscripten/blob/4.0.8/system/lib/libc/emscripten_syscall_stubs.c#L63
             // It doesn't really seem to mean anything? But for completeness we include it here.
             Self::Wasm32Pyodide2024 => "#1",
+            Self::Arm64Ios => "",
+            Self::Arm64IosSimulator => "",
+            Self::X8664IosSimulator => "",
         }
     }
 
@@ -654,9 +765,14 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "",
             Self::Aarch64Manylinux239 => "",
             Self::Aarch64Manylinux240 => "",
+            Self::Aarch64LinuxAndroid => "",
+            Self::X8664LinuxAndroid => "",
             // This is the Emscripten compiler version for Pyodide 2024.
             // See https://pyodide.org/en/stable/development/abi.html#pyodide-2024-0
             Self::Wasm32Pyodide2024 => "3.1.58",
+            Self::Arm64Ios => "",
+            Self::Arm64IosSimulator => "",
+            Self::X8664IosSimulator => "",
         }
     }
 
@@ -699,7 +815,12 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "posix",
             Self::Aarch64Manylinux239 => "posix",
             Self::Aarch64Manylinux240 => "posix",
+            Self::Aarch64LinuxAndroid => "posix",
+            Self::X8664LinuxAndroid => "posix",
             Self::Wasm32Pyodide2024 => "posix",
+            Self::Arm64Ios => "posix",
+            Self::Arm64IosSimulator => "posix",
+            Self::X8664IosSimulator => "posix",
         }
     }
 
@@ -742,7 +863,12 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => "linux",
             Self::Aarch64Manylinux239 => "linux",
             Self::Aarch64Manylinux240 => "linux",
+            Self::Aarch64LinuxAndroid => "android",
+            Self::X8664LinuxAndroid => "android",
             Self::Wasm32Pyodide2024 => "emscripten",
+            Self::Arm64Ios => "ios",
+            Self::Arm64IosSimulator => "ios",
+            Self::X8664IosSimulator => "ios",
         }
     }
 
@@ -785,7 +911,12 @@ impl TargetTriple {
             Self::Aarch64Manylinux238 => true,
             Self::Aarch64Manylinux239 => true,
             Self::Aarch64Manylinux240 => true,
+            Self::Aarch64LinuxAndroid => false,
+            Self::X8664LinuxAndroid => false,
             Self::Wasm32Pyodide2024 => false,
+            Self::Arm64Ios => false,
+            Self::Arm64IosSimulator => false,
+            Self::X8664IosSimulator => false,
         }
     }
 
@@ -817,4 +948,28 @@ fn macos_deployment_target() -> Option<(u16, u16)> {
     let minor = parts.next().unwrap_or("0").parse::<u16>().ok()?;
 
     Some((major, minor))
+}
+
+/// Return the iOS deployment target as parsed from the environment.
+fn ios_deployment_target() -> Option<(u16, u16)> {
+    let version = std::env::var(EnvVars::IPHONEOS_DEPLOYMENT_TARGET).ok()?;
+    let mut parts = version.split('.');
+
+    // Parse the major version (e.g., `12` in `12.0`).
+    let major = parts.next()?.parse::<u16>().ok()?;
+
+    // Parse the minor version (e.g., `0` in `12.0`), with a default of `0`.
+    let minor = parts.next().unwrap_or("0").parse::<u16>().ok()?;
+
+    Some((major, minor))
+}
+
+/// Return the Android API level as parsed from the environment.
+fn android_api_level() -> Option<u16> {
+    let api_level_str = std::env::var(EnvVars::ANDROID_API_LEVEL).ok()?;
+
+    // Parse the api level.
+    let api_level = api_level_str.parse::<u16>().ok()?;
+
+    Some(api_level)
 }
