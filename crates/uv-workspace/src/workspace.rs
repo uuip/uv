@@ -57,7 +57,7 @@ pub enum WorkspaceError {
     NonWorkspace(PathBuf),
     #[error("Nested workspaces are not supported, but workspace member (`{}`) has a `uv.workspace` table", _0.simplified_display())]
     NestedWorkspace(PathBuf),
-    #[error("Two workspace members are both named: `{name}`: `{}` and `{}`", first.simplified_display(), second.simplified_display())]
+    #[error("Two workspace members are both named `{name}`: `{}` and `{}`", first.simplified_display(), second.simplified_display())]
     DuplicatePackage {
         name: PackageName,
         first: PathBuf,
@@ -65,6 +65,11 @@ pub enum WorkspaceError {
     },
     #[error("pyproject.toml section is declared as dynamic, but must be static: `{0}`")]
     DynamicNotAllowed(&'static str),
+    #[error(
+        "Workspace member `{}` was requested as both `editable = true` and `editable = false`",
+        _0
+    )]
+    EditableConflict(PackageName),
     #[error("Failed to find directories for glob: `{0}`")]
     Pattern(String, #[source] PatternError),
     // Syntax and other errors.
@@ -99,6 +104,8 @@ pub struct DiscoveryOptions {
 
 pub type RequiresPythonSources = BTreeMap<(PackageName, Option<GroupName>), VersionSpecifiers>;
 
+pub type Editability = Option<bool>;
+
 /// A workspace, consisting of a root directory and members. See [`ProjectWorkspace`].
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(serde::Serialize))]
@@ -110,8 +117,9 @@ pub struct Workspace {
     install_path: PathBuf,
     /// The members of the workspace.
     packages: WorkspaceMembers,
-    /// The workspace members that are required by other members.
-    required_members: BTreeSet<PackageName>,
+    /// The workspace members that are required by other members, and whether they were requested
+    /// as editable.
+    required_members: BTreeMap<PackageName, Editability>,
     /// The sources table from the workspace `pyproject.toml`.
     ///
     /// This table is overridden by the project sources.
@@ -256,15 +264,16 @@ impl Workspace {
     /// Set the [`ProjectWorkspace`] for a given workspace member.
     ///
     /// Assumes that the project name is unchanged in the updated [`PyProjectToml`].
-    #[must_use]
     pub fn with_pyproject_toml(
         self,
         package_name: &PackageName,
         pyproject_toml: PyProjectToml,
-    ) -> Option<Self> {
+    ) -> Result<Option<Self>, WorkspaceError> {
         let mut packages = self.packages;
 
-        let member = Arc::make_mut(&mut packages).get_mut(package_name)?;
+        let Some(member) = Arc::make_mut(&mut packages).get_mut(package_name) else {
+            return Ok(None);
+        };
 
         if member.root == self.install_path {
             // If the member is also the workspace root, update _both_ the member entry and the
@@ -288,28 +297,28 @@ impl Workspace {
                 &packages,
                 &workspace_sources,
                 &workspace_pyproject_toml,
-            );
+            )?;
 
-            Some(Self {
+            Ok(Some(Self {
                 pyproject_toml: workspace_pyproject_toml,
                 sources: workspace_sources,
                 packages,
                 required_members,
                 ..self
-            })
+            }))
         } else {
             // Set the `pyproject.toml` for the member.
             member.pyproject_toml = pyproject_toml;
 
             // Recompute required_members with the updated member data
             let required_members =
-                Self::collect_required_members(&packages, &self.sources, &self.pyproject_toml);
+                Self::collect_required_members(&packages, &self.sources, &self.pyproject_toml)?;
 
-            Some(Self {
+            Ok(Some(Self {
                 packages,
                 required_members,
                 ..self
-            })
+            }))
         }
     }
 
@@ -338,7 +347,13 @@ impl Workspace {
                 {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(true),
+                        editable: Some(
+                            self.required_members
+                                .get(name)
+                                .copied()
+                                .flatten()
+                                .unwrap_or(true),
+                        ),
                         r#virtual: Some(false),
                         url,
                     }
@@ -356,11 +371,12 @@ impl Workspace {
     }
 
     /// The workspace members that are required my another member of the workspace.
-    pub fn required_members(&self) -> &BTreeSet<PackageName> {
+    pub fn required_members(&self) -> &BTreeMap<PackageName, Editability> {
         &self.required_members
     }
 
-    /// Compute the workspace members that are required by another member of the workspace.
+    /// Compute the workspace members that are required by another member of the workspace, and
+    /// determine whether they should be installed as editable or non-editable.
     ///
     /// N.B. this checks if a workspace member is required by inspecting `tool.uv.source` entries,
     /// but does not actually check if the source is _used_, which could result in false positives
@@ -369,8 +385,10 @@ impl Workspace {
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         sources: &BTreeMap<PackageName, Sources>,
         pyproject_toml: &PyProjectToml,
-    ) -> BTreeSet<PackageName> {
-        sources
+    ) -> Result<BTreeMap<PackageName, Editability>, WorkspaceError> {
+        let mut required_members = BTreeMap::new();
+
+        for (package, sources) in sources
             .iter()
             .filter(|(name, _)| {
                 pyproject_toml
@@ -397,18 +415,29 @@ impl Workspace {
                     })
                     .flatten(),
             )
-            .filter_map(|(package, sources)| {
-                sources
-                    .iter()
-                    .any(|source| matches!(source, Source::Workspace { .. }))
-                    .then_some(package.clone())
-            })
-            .collect()
+        {
+            for source in sources.iter() {
+                let Source::Workspace { editable, .. } = &source else {
+                    continue;
+                };
+                let existing = required_members.insert(package.clone(), *editable);
+                if let Some(Some(existing)) = existing {
+                    if let Some(editable) = editable {
+                        // If there are conflicting `editable` values, raise an error.
+                        if existing != *editable {
+                            return Err(WorkspaceError::EditableConflict(package.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(required_members)
     }
 
     /// Whether a given workspace member is required by another member.
     pub fn is_required_member(&self, name: &PackageName) -> bool {
-        self.required_members().contains(name)
+        self.required_members().contains_key(name)
     }
 
     /// Returns the set of all workspace member dependency groups.
@@ -442,18 +471,19 @@ impl Workspace {
                 return None;
             }
 
+            let value = self.required_members.get(name);
+            let is_required_member = value.is_some();
+            let editability = value.copied().flatten();
+
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
                 extras: Box::new([]),
                 groups: groups.into_boxed_slice(),
                 marker: MarkerTree::TRUE,
-                source: if member
-                    .pyproject_toml()
-                    .is_package(!self.is_required_member(name))
-                {
+                source: if member.pyproject_toml().is_package(!is_required_member) {
                     RequirementSource::Directory {
                         install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(true),
+                        editable: Some(editability.unwrap_or(true)),
                         r#virtual: Some(false),
                         url,
                     }
@@ -863,7 +893,7 @@ impl Workspace {
             &workspace_members,
             &workspace_sources,
             &workspace_pyproject_toml,
-        );
+        )?;
 
         Ok(Self {
             install_path: workspace_root,
@@ -1282,14 +1312,17 @@ impl ProjectWorkspace {
     /// Set the `pyproject.toml` for the current project.
     ///
     /// Assumes that the project name is unchanged in the updated [`PyProjectToml`].
-    #[must_use]
-    pub fn with_pyproject_toml(self, pyproject_toml: PyProjectToml) -> Option<Self> {
-        Some(Self {
-            workspace: self
-                .workspace
-                .with_pyproject_toml(&self.project_name, pyproject_toml)?,
-            ..self
-        })
+    pub fn with_pyproject_toml(
+        self,
+        pyproject_toml: PyProjectToml,
+    ) -> Result<Option<Self>, WorkspaceError> {
+        let Some(workspace) = self
+            .workspace
+            .with_pyproject_toml(&self.project_name, pyproject_toml)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Self { workspace, ..self }))
     }
 
     /// Find the workspace for a project.
@@ -1357,7 +1390,7 @@ impl ProjectWorkspace {
                 &current_project_as_members,
                 &workspace_sources,
                 project_pyproject_toml,
-            );
+            )?;
 
             return Ok(Self {
                 project_root: project_path.clone(),
@@ -1679,11 +1712,16 @@ impl VirtualProject {
     /// Set the `pyproject.toml` for the current project.
     ///
     /// Assumes that the project name is unchanged in the updated [`PyProjectToml`].
-    #[must_use]
-    pub fn with_pyproject_toml(self, pyproject_toml: PyProjectToml) -> Option<Self> {
-        match self {
+    pub fn with_pyproject_toml(
+        self,
+        pyproject_toml: PyProjectToml,
+    ) -> Result<Option<Self>, WorkspaceError> {
+        Ok(match self {
             Self::Project(project) => {
-                Some(Self::Project(project.with_pyproject_toml(pyproject_toml)?))
+                let Some(project) = project.with_pyproject_toml(pyproject_toml)? else {
+                    return Ok(None);
+                };
+                Some(Self::Project(project))
             }
             Self::NonProject(workspace) => {
                 // If this is a non-project workspace root, then by definition the root isn't a
@@ -1693,7 +1731,7 @@ impl VirtualProject {
                     ..workspace.clone()
                 }))
             }
-        }
+        })
     }
 
     /// Return the root of the project.
@@ -1820,7 +1858,7 @@ mod tests {
                 "pyproject_toml": "[PYPROJECT_TOML]"
               }
             },
-            "required_members": [],
+            "required_members": {},
             "sources": {},
             "indexes": [],
             "pyproject_toml": {
@@ -1874,7 +1912,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -1955,14 +1993,15 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [
-                  "bird-feeder",
-                  "seeds"
-                ],
+                "required_members": {
+                  "bird-feeder": null,
+                  "seeds": null
+                },
                 "sources": {
                   "bird-feeder": [
                     {
                       "workspace": true,
+                      "editable": null,
                       "extra": null,
                       "group": null
                     }
@@ -1986,6 +2025,7 @@ mod tests {
                         "bird-feeder": [
                           {
                             "workspace": true,
+                            "editable": null,
                             "extra": null,
                             "group": null
                           }
@@ -2080,10 +2120,10 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [
-                  "bird-feeder",
-                  "seeds"
-                ],
+                "required_members": {
+                  "bird-feeder": null,
+                  "seeds": null
+                },
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2151,7 +2191,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2286,7 +2326,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2394,7 +2434,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2516,7 +2556,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2612,7 +2652,7 @@ mod tests {
                     "pyproject_toml": "[PYPROJECT_TOML]"
                   }
                 },
-                "required_members": [],
+                "required_members": {},
                 "sources": {},
                 "indexes": [],
                 "pyproject_toml": {
@@ -2803,7 +2843,7 @@ bar = ["b"]
         insta::with_settings!({filters => filters}, {
             assert_snapshot!(
                 error,
-            @"Two workspace members are both named: `seeds`: `[ROOT]/packages/seeds` and `[ROOT]/packages/seeds2`");
+            @"Two workspace members are both named `seeds`: `[ROOT]/packages/seeds` and `[ROOT]/packages/seeds2`");
         });
 
         Ok(())
