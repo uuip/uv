@@ -1192,7 +1192,10 @@ fn parse_maybe_string(input: &str) -> Result<Maybe<String>, String> {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipCompileArgs {
-    /// Include all packages listed in the given `requirements.in` files.
+    /// Include the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// If a `pyproject.toml`, `setup.py`, or `setup.cfg` file is provided, uv will extract the
     /// requirements for the relevant project.
@@ -1544,7 +1547,10 @@ pub struct PipCompileArgs {
 
 #[derive(Args)]
 pub struct PipSyncArgs {
-    /// Include all packages listed in the given `requirements.txt` files.
+    /// Include the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// If a `pyproject.toml`, `setup.py`, or `setup.cfg` file is provided, uv will
     /// extract the requirements for the relevant project.
@@ -1836,7 +1842,10 @@ pub struct PipInstallArgs {
     #[arg(group = "sources")]
     pub package: Vec<String>,
 
-    /// Install all packages listed in the given `requirements.txt`, PEP 723 scripts, or `pylock.toml` files.
+    /// Install the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// If a `pyproject.toml`, `setup.py`, or `setup.cfg` file is provided, uv will extract the
     /// requirements for the relevant project.
@@ -2155,7 +2164,10 @@ pub struct PipUninstallArgs {
     #[arg(group = "sources")]
     pub package: Vec<String>,
 
-    /// Uninstall all packages listed in the given requirements files.
+    /// Uninstall the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     #[arg(long, short, alias = "requirement", group = "sources", value_parser = parse_file_path)]
     pub requirements: Vec<PathBuf>,
 
@@ -3155,9 +3167,14 @@ pub struct RunArgs {
     #[arg(long, conflicts_with_all = ["group", "all_groups", "no_dev"])]
     pub only_dev: bool,
 
+    /// Install any non-editable dependencies, including the project and any workspace members, as
+    /// editable.
+    #[arg(long, overrides_with = "no_editable", hide = true)]
+    pub editable: bool,
+
     /// Install any editable dependencies, including the project and any workspace members, as
     /// non-editable.
-    #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
+    #[arg(long, overrides_with = "editable", value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
     pub no_editable: bool,
 
     /// Do not remove extraneous packages present in the environment.
@@ -3205,8 +3222,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub with_editable: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Run with all packages listed in the given `requirements.txt` files or PEP 723 Python
-    /// scripts.
+    /// Run with the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// and `pylock.toml`.
     ///
     /// The same environment semantics as `--with` apply.
     ///
@@ -3463,9 +3482,14 @@ pub struct SyncArgs {
     #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
     pub all_groups: bool,
 
+    /// Install any non-editable dependencies, including the project and any workspace members, as
+    /// editable.
+    #[arg(long, overrides_with = "no_editable", hide = true)]
+    pub editable: bool,
+
     /// Install any editable dependencies, including the project and any workspace members, as
     /// non-editable.
-    #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
+    #[arg(long, overrides_with = "editable", value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
     pub no_editable: bool,
 
     /// Do not remove extraneous packages present in the environment.
@@ -3725,7 +3749,10 @@ pub struct AddArgs {
     #[arg(group = "sources")]
     pub packages: Vec<String>,
 
-    /// Add all packages listed in the given `requirements.txt` files.
+    /// Add the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     #[arg(long, short, alias = "requirement", group = "sources", value_parser = parse_file_path)]
     pub requirements: Vec<PathBuf>,
 
@@ -4307,9 +4334,14 @@ pub struct ExportArgs {
     #[arg(long, overrides_with("no_header"), hide = true)]
     pub header: bool,
 
+    /// Export any non-editable dependencies, including the project and any workspace members, as
+    /// editable.
+    #[arg(long, overrides_with = "no_editable", hide = true)]
+    pub editable: bool,
+
     /// Export any editable dependencies, including the project and any workspace members, as
     /// non-editable.
-    #[arg(long, value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
+    #[arg(long, overrides_with = "editable", value_parser = clap::builder::BoolishValueParser::new(), env = EnvVars::UV_NO_EDITABLE)]
     pub no_editable: bool,
 
     /// Include hashes for all dependencies.
@@ -4576,8 +4608,10 @@ pub struct ToolRunArgs {
     #[arg(long)]
     pub with_editable: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Run with all packages listed in the given `requirements.txt` files or PEP 723 Python
-    /// scripts.
+    /// Run with the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// and `pylock.toml`.
     #[arg(long, value_delimiter = ',', value_parser = parse_maybe_file_path)]
     pub with_requirements: Vec<Maybe<PathBuf>>,
 
@@ -4707,8 +4741,10 @@ pub struct ToolInstallArgs {
     #[arg(short = 'w', long)]
     pub with: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Run with all packages listed in the given `requirements.txt` files or PEP 723 Python
-    /// scripts.
+    /// Run with the packages listed in the given files.
+    ///
+    /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
+    /// and `pylock.toml`.
     #[arg(long, value_delimiter = ',', value_parser = parse_maybe_file_path)]
     pub with_requirements: Vec<Maybe<PathBuf>>,
 

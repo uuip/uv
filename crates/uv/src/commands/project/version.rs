@@ -11,8 +11,8 @@ use uv_cli::version::VersionInfo;
 use uv_cli::{VersionBump, VersionFormat};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, EditableMode,
-    ExtrasSpecification, InstallOptions,
+    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
+    InstallOptions,
 };
 use uv_fs::Simplified;
 use uv_normalize::DefaultExtras;
@@ -392,7 +392,7 @@ fn update_project(
 
     // Update the `pyproject.toml` in-memory.
     let project = project
-        .with_pyproject_toml(toml::from_str(&content).map_err(ProjectError::PyprojectTomlParse)?)
+        .with_pyproject_toml(toml::from_str(&content).map_err(ProjectError::PyprojectTomlParse)?)?
         .ok_or(ProjectError::PyprojectTomlUpdate)?;
 
     Ok(project)
@@ -640,7 +640,7 @@ async fn lock_and_sync(
         venv,
         &extras,
         &groups,
-        EditableMode::Editable,
+        None,
         install_options,
         Modifications::Sufficient,
         None,
