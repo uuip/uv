@@ -19,7 +19,8 @@ use uv_warnings::warn_user_once;
 
 use crate::metadata::DEFAULT_EXCLUDES;
 use crate::{
-    BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml, find_roots,
+    BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
+    error_on_venv, find_roots,
 };
 
 /// Build a wheel from the source tree and place it in the output directory.
@@ -176,9 +177,11 @@ fn write_wheel(
                 .strip_prefix(&src_root)
                 .expect("walkdir starts with root");
             if exclude_matcher.is_match(match_path) {
-                trace!("Excluding from module: `{}`", match_path.user_display());
+                trace!("Excluding from module: {}", match_path.user_display());
                 continue;
             }
+
+            error_on_venv(entry.file_name(), entry.path())?;
 
             let entry_path = entry_path.portable_display().to_string();
             debug!("Adding to wheel: {entry_path}");
@@ -208,7 +211,7 @@ fn write_wheel(
     // Add the data files
     for (name, directory) in settings.data.iter() {
         debug!(
-            "Adding {name} data files from: `{}`",
+            "Adding {name} data files from: {}",
             directory.user_display()
         );
         if directory
@@ -299,7 +302,7 @@ pub fn build_editable(
         src_root.as_os_str().as_encoded_bytes(),
     )?;
 
-    debug!("Adding metadata files to: `{}`", wheel_path.user_display());
+    debug!("Adding metadata files to: {}", wheel_path.user_display());
     let dist_info_dir = write_dist_info(
         &mut wheel_writer,
         &pyproject_toml,
@@ -525,15 +528,17 @@ fn wheel_subdir_from_globs(
             .expect("walkdir starts with root");
 
         if !matcher.match_path(relative) {
-            trace!("Excluding {}: `{}`", globs_field, relative.user_display());
+            trace!("Excluding {}: {}", globs_field, relative.user_display());
             continue;
         }
+
+        error_on_venv(entry.file_name(), entry.path())?;
 
         let license_path = Path::new(target)
             .join(relative)
             .portable_display()
             .to_string();
-        debug!("Adding for {}: `{}`", globs_field, relative.user_display());
+        debug!("Adding for {}: {}", globs_field, relative.user_display());
         wheel_writer.write_dir_entry(&entry, &license_path)?;
     }
     Ok(())
