@@ -407,14 +407,15 @@ fn lock_sdist_git() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @r###"
+    uv_snapshot!(context.filters(), context.lock(), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    "###);
+    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -738,14 +739,15 @@ fn lock_sdist_git_pep508() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @r###"
+    uv_snapshot!(context.filters(), context.lock(), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    "###);
+    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -4942,6 +4944,7 @@ fn lock_git_sha() -> Result<()> {
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
     ");
 
     let lock = context.read("uv.lock");
@@ -7086,6 +7089,7 @@ fn lock_dev() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 3 packages in [TIME]
     ");
 
@@ -7143,37 +7147,40 @@ fn lock_dev() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 3 packages in [TIME]
-    "###);
+    ");
 
     // Install from the lockfile, excluding development dependencies.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-dev"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-dev"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
-    "###);
+    ");
 
     // Install from the lockfile, including development dependencies (the default).
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Installed 1 package in [TIME]
      + typing-extensions==4.12.2 (from https://files.pythonhosted.org/packages/26/9f/ad63fc0248c5379346306f8668cda6e2e2e9c95e01216d2b8ffd9ff037d0/typing_extensions-4.12.2-py3-none-any.whl)
-    "###);
+    ");
 
     Ok(())
 }
@@ -9092,6 +9099,7 @@ fn lock_dev_transitive() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `baz/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 5 packages in [TIME]
     ");
@@ -10130,14 +10138,15 @@ fn lock_no_sources() -> Result<()> {
     )?;
 
     // Lock the root package with `tool.uv.sources` enabled.
-    uv_snapshot!(context.filters(), context.lock(), @r###"
+    uv_snapshot!(context.filters(), context.lock(), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    "###);
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -10205,28 +10214,30 @@ fn lock_no_sources() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    "###);
+    ");
 
     // Lock the root package with `tool.uv.sources` disabled.
-    uv_snapshot!(context.filters(), context.lock().arg("--no-sources"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-sources"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 5 packages in [TIME]
     Updated anyio v0.1.0 -> v4.3.0
     Added idna v3.6
     Removed iniconfig v2.0.0
     Added sniffio v1.3.1
-    "###);
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -10305,14 +10316,15 @@ fn lock_no_sources() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--no-sources").arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-sources").arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 5 packages in [TIME]
-    "###);
+    ");
 
     Ok(())
 }
@@ -11836,14 +11848,14 @@ fn lock_local_index() -> Result<()> {
         Url::from_file_path(&root).unwrap().as_str()
     })?;
 
-    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @r###"
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -12928,14 +12940,15 @@ fn lock_mismatched_sources() -> Result<()> {
     });
 
     // If we run with `--no-sources`, we should use the URL provided in `project.dependencies`.
-    uv_snapshot!(context.filters(), context.lock().arg("--no-sources"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-sources"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    "###);
+    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
+    ");
 
     let lock = context.read("uv.lock");
 
@@ -15152,14 +15165,15 @@ fn lock_dev_dependencies_alias() -> Result<()> {
     "#)?;
 
     // Re-locking should be a no-op.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     // If we add a package, re-locking should use `dependency-groups`.
     pyproject_toml.write_str(
@@ -15181,6 +15195,7 @@ fn lock_dev_dependencies_alias() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 3 packages in [TIME]
     Added typing-extensions v4.10.0
     ");
@@ -16773,6 +16788,7 @@ fn lock_dropped_dev_extra() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
     ");
 
@@ -16827,37 +16843,40 @@ fn lock_dropped_dev_extra() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     // Re-run with `--offline`. We shouldn't need a network connection to validate an
     // already-correct lockfile with immutable metadata.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + coverage==7.4.4
-    "###);
+    ");
 
     Ok(())
 }
@@ -16887,6 +16906,7 @@ fn lock_empty_dev_dependencies() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
     ");
 
@@ -16931,37 +16951,40 @@ fn lock_empty_dev_dependencies() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     // Re-run with `--offline`. We shouldn't need a network connection to validate an
     // already-correct lockfile with immutable metadata.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    "###);
+    ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
-    "###);
+    ");
 
     Ok(())
 }
@@ -18554,6 +18577,7 @@ fn lock_explicit_virtual_project() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
     ");
 
@@ -18702,33 +18726,36 @@ fn lock_explicit_virtual_project() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
-    "###);
+    ");
 
     // Re-run with `--offline`. We shouldn't need a network connection to validate an
     // already-correct lockfile with immutable metadata.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
-    "###);
+    ");
 
     // Install from the lockfile. The virtual project should _not_ be installed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Prepared 9 packages in [TIME]
     Installed 9 packages in [TIME]
      + anyio==4.3.0
@@ -18740,7 +18767,7 @@ fn lock_explicit_virtual_project() -> Result<()> {
      + pathspec==0.12.1
      + platformdirs==4.2.0
      + sniffio==1.3.1
-    "###);
+    ");
 
     Ok(())
 }
@@ -18772,6 +18799,7 @@ fn lock_implicit_virtual_project() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
     ");
 
@@ -18920,33 +18948,36 @@ fn lock_implicit_virtual_project() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
-    "###);
+    ");
 
     // Re-run with `--offline`. We shouldn't need a network connection to validate an
     // already-correct lockfile with immutable metadata.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r###"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 11 packages in [TIME]
-    "###);
+    ");
 
     // Install from the lockfile. The virtual project should _not_ be installed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r###"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @r"
     success: true
     exit_code: 0
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Prepared 9 packages in [TIME]
     Installed 9 packages in [TIME]
      + anyio==4.3.0
@@ -18958,7 +18989,7 @@ fn lock_implicit_virtual_project() -> Result<()> {
      + pathspec==0.12.1
      + platformdirs==4.2.0
      + sniffio==1.3.1
-    "###);
+    ");
 
     Ok(())
 }
@@ -22904,6 +22935,7 @@ fn lock_group_requires_dev_dep() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     error: Project `myproject` has malformed dependency groups
       Caused by: `[tool.uv.dependency-groups]` specifies the `dev` group, but only `tool.uv.dev-dependencies` was found. To reference the `dev` group, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead.
     ");
@@ -23093,6 +23125,7 @@ fn lock_group_include_dev() -> Result<()> {
     ----- stdout -----
 
     ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     error: Project `project` has malformed dependency groups
       Caused by: Group `foo` includes the `dev` group (`include = "dev"`), but only `tool.uv.dev-dependencies` was found. To reference the `dev` group via an `include`, remove the `tool.uv.dev-dependencies` section and add any development dependencies to the `dev` entry in the `[dependency-groups]` table instead.
     "#);
@@ -31486,6 +31519,111 @@ fn lock_android() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     "###);
+
+    Ok(())
+}
+
+/// See: <https://github.com/astral-sh/uv/issues/9832#issuecomment-2539121761>
+#[test]
+fn lock_git_change_log() -> Result<()> {
+    let context = TestContext::new("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12.0"
+        dependencies = [
+            "typing-extensions",
+        ]
+
+        [tool.uv.sources]
+        typing-extensions = { git = "https://github.com/python/typing_extensions" }
+        "#,
+    )?;
+
+    // Write a stale commit.
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12.0"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "foo"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "typing-extensions" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "typing-extensions", git = "https://github.com/python/typing_extensions?rev=4f42e6bf0052129bc6dae5e71699a409652d2091" }]
+
+        [[package]]
+        name = "typing-extensions"
+        version = "4.15.0"
+        source = { git = "https://github.com/python/typing_extensions?rev=4f42e6bf0052129bc6dae5e71699a409652d2091#4f42e6bf0052129bc6dae5e71699a409652d2091" }
+    "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--dry-run"), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Update typing-extensions v4.15.0 (4f42e6bf) -> v4.15.0 (9215c953)
+    ");
+
+    uv_snapshot!(context.filters(), context.lock(), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated typing-extensions v4.15.0 (4f42e6bf) -> v4.15.0 (9215c953)
+    ");
+
+    let lock = context.read("uv.lock");
+
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(
+            lock, @r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12.[X]"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "foo"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "typing-extensions" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "typing-extensions", git = "https://github.com/python/typing_extensions" }]
+
+        [[package]]
+        name = "typing-extensions"
+        version = "4.15.0"
+        source = { git = "https://github.com/python/typing_extensions#9215c953610ca4e4ce7ae840a0a804505da70a05" }
+        "#
+        );
+    });
 
     Ok(())
 }
