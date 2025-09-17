@@ -1200,7 +1200,7 @@ mod tests {
             "We should allow the active conda python"
         );
 
-        let baseenv = context.tempdir.child("base");
+        let baseenv = context.tempdir.child("conda");
         TestContext::mock_conda_prefix(&baseenv, "3.12.1")?;
 
         // But not if it's a base environment
@@ -1208,6 +1208,7 @@ mod tests {
             &[
                 ("CONDA_PREFIX", Some(baseenv.as_os_str())),
                 ("CONDA_DEFAULT_ENV", Some(&OsString::from("base"))),
+                (EnvVars::CONDA_ROOT, None),
             ],
             || {
                 find_python_installation(
@@ -1226,21 +1227,24 @@ mod tests {
         );
 
         // Unless, system interpreters are included...
-        let python = context.run_with_vars(
-            &[
-                ("CONDA_PREFIX", Some(baseenv.as_os_str())),
-                ("CONDA_DEFAULT_ENV", Some(&OsString::from("base"))),
-            ],
-            || {
-                find_python_installation(
-                    &PythonRequest::Default,
-                    EnvironmentPreference::OnlySystem,
-                    PythonPreference::OnlySystem,
-                    &context.cache,
-                    Preview::default(),
-                )
-            },
-        )??;
+        let python = context
+            .run_with_vars(
+                &[
+                    ("CONDA_PREFIX", Some(baseenv.as_os_str())),
+                    ("CONDA_DEFAULT_ENV", Some(&OsString::from("base"))),
+                    (EnvVars::CONDA_ROOT, None),
+                ],
+                || {
+                    find_python_installation(
+                        &PythonRequest::Default,
+                        EnvironmentPreference::OnlySystem,
+                        PythonPreference::OnlySystem,
+                        &context.cache,
+                        Preview::default(),
+                    )
+                },
+            )?
+            .unwrap();
 
         assert_eq!(
             python.interpreter().python_full_version().to_string(),
@@ -1249,10 +1253,72 @@ mod tests {
         );
 
         // If the environment name doesn't match the default, we should not treat it as system
+        let python = context
+            .run_with_vars(
+                &[
+                    ("CONDA_PREFIX", Some(condaenv.as_os_str())),
+                    ("CONDA_DEFAULT_ENV", Some(&OsString::from("condaenv"))),
+                ],
+                || {
+                    find_python_installation(
+                        &PythonRequest::Default,
+                        EnvironmentPreference::OnlyVirtual,
+                        PythonPreference::OnlySystem,
+                        &context.cache,
+                        Preview::default(),
+                    )
+                },
+            )?
+            .unwrap();
+
+        assert_eq!(
+            python.interpreter().python_full_version().to_string(),
+            "3.12.0",
+            "We should find the conda environment"
+        );
+
+        // Test _CONDA_ROOT detection of base environment
+        let conda_root_env = context.tempdir.child("conda-root");
+        TestContext::mock_conda_prefix(&conda_root_env, "3.12.2")?;
+
+        // When _CONDA_ROOT matches CONDA_PREFIX, it should be treated as a base environment
+        let result = context.run_with_vars(
+            &[
+                (EnvVars::CONDA_PREFIX, Some(conda_root_env.as_os_str())),
+                (EnvVars::CONDA_ROOT, Some(conda_root_env.as_os_str())),
+                (
+                    EnvVars::CONDA_DEFAULT_ENV,
+                    Some(&OsString::from("custom-name")),
+                ),
+            ],
+            || {
+                find_python_installation(
+                    &PythonRequest::Default,
+                    EnvironmentPreference::OnlyVirtual,
+                    PythonPreference::OnlySystem,
+                    &context.cache,
+                    Preview::default(),
+                )
+            },
+        )?;
+
+        assert!(
+            matches!(result, Err(PythonNotFound { .. })),
+            "Base environment detected via _CONDA_ROOT should be excluded from virtual environments; got {result:?}"
+        );
+
+        // When _CONDA_ROOT doesn't match CONDA_PREFIX, it should be treated as a regular conda environment
+        let other_conda_env = context.tempdir.child("other-conda");
+        TestContext::mock_conda_prefix(&other_conda_env, "3.12.3")?;
+
         let python = context.run_with_vars(
             &[
-                ("CONDA_PREFIX", Some(condaenv.as_os_str())),
-                ("CONDA_DEFAULT_ENV", Some(&OsString::from("base"))),
+                (EnvVars::CONDA_PREFIX, Some(other_conda_env.as_os_str())),
+                (EnvVars::CONDA_ROOT, Some(conda_root_env.as_os_str())),
+                (
+                    EnvVars::CONDA_DEFAULT_ENV,
+                    Some(&OsString::from("custom-env")),
+                ),
             ],
             || {
                 find_python_installation(
@@ -1267,8 +1333,8 @@ mod tests {
 
         assert_eq!(
             python.interpreter().python_full_version().to_string(),
-            "3.12.0",
-            "We should find the conda environment"
+            "3.12.3",
+            "Non-base conda environment should be available for virtual environment preference"
         );
 
         Ok(())
