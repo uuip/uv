@@ -3,6 +3,56 @@
 <!-- prettier-ignore-start -->
 
 
+## 0.8.22
+
+Released on 2025-09-23.
+
+### Python
+
+- Upgrade Pyodide to 0.28.3 ([#15999](https://github.com/astral-sh/uv/pull/15999))
+
+### Security 
+
+- Upgrade `astral-tokio-tar` to 0.5.5 which [hardens tar archive extraction](https://github.com/astral-sh/tokio-tar/security/advisories/GHSA-3wgq-wrwc-vqmv) ([#16004](https://github.com/astral-sh/uv/pull/16004))
+
+## 0.8.21
+
+Released on 2025-09-23.
+
+### Enhancements
+
+- Refresh lockfile when `--refresh` is provided ([#15994](https://github.com/astral-sh/uv/pull/15994))
+
+### Preview features
+
+Add support for S3 request signing ([#15925](https://github.com/astral-sh/uv/pull/15925))
+
+## 0.8.20
+
+Released on 2025-09-22.
+
+### Enhancements
+
+- Add `--force` flag for `uv cache clean` ([#15992](https://github.com/astral-sh/uv/pull/15992))
+- Improve resolution errors with proxied packages ([#15200](https://github.com/astral-sh/uv/pull/15200))
+
+### Preview features
+
+- Allow upgrading pre-release versions of the same minor Python version ([#15959](https://github.com/astral-sh/uv/pull/15959))
+
+### Bug fixes
+
+- Hide `freethreaded+debug` Python downloads in `uv python list` ([#15985](https://github.com/astral-sh/uv/pull/15985))
+- Retain the cache lock and temporary caches during `uv run` and `uvx` ([#15990](https://github.com/astral-sh/uv/pull/15990))
+
+### Documentation
+
+- Add `package` level conflicts to the conflicting dependencies docs ([#15963](https://github.com/astral-sh/uv/pull/15963))
+- Document pyodide support ([#15962](https://github.com/astral-sh/uv/pull/15962))
+- Document support for free-threaded and debug Python versions ([#15961](https://github.com/astral-sh/uv/pull/15961))
+- Expand the contribution docs on issue selection ([#15966](https://github.com/astral-sh/uv/pull/15966))
+- Tweak title for viewing version in project guide ([#15964](https://github.com/astral-sh/uv/pull/15964))
+
 ## 0.8.19
 
 Released on 2025-09-19.
