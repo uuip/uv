@@ -367,6 +367,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
         },
         durations_layer,
         globals.color,
+        environment.log_context.unwrap_or_default(),
     )?;
 
     // Configure the `Printer`, which controls user-facing output in the CLI.
@@ -523,7 +524,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             args.compat_args.validate()?;
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipCompileSettings::resolve(args, filesystem);
+            let args = PipCompileSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -624,7 +625,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             args.compat_args.validate()?;
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipSyncSettings::resolve(args, filesystem);
+            let args = PipSyncSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -703,7 +704,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             args.compat_args.validate()?;
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let mut args = PipInstallSettings::resolve(args, filesystem);
+            let mut args = PipInstallSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             let mut requirements = Vec::with_capacity(
@@ -845,7 +846,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PipCommand::Uninstall(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipUninstallSettings::resolve(args, filesystem);
+            let args = PipUninstallSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -881,7 +882,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PipCommand::Freeze(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipFreezeSettings::resolve(args, filesystem);
+            let args = PipFreezeSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -904,7 +905,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             args.compat_args.validate()?;
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipListSettings::resolve(args, filesystem);
+            let args = PipListSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -935,7 +936,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PipCommand::Show(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipShowSettings::resolve(args, filesystem);
+            let args = PipShowSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -956,7 +957,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PipCommand::Tree(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipTreeSettings::resolve(args, filesystem);
+            let args = PipTreeSettings::resolve(args, filesystem, environment);
 
             // Initialize the cache.
             let cache = cache.init()?;
@@ -989,7 +990,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PipCommand::Check(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PipCheckSettings::resolve(args, filesystem);
+            let args = PipCheckSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1026,7 +1027,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
         }
         Commands::Build(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::BuildSettings::resolve(args, filesystem);
+            let args = settings::BuildSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1085,7 +1086,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::VenvSettings::resolve(args, filesystem);
+            let args = settings::VenvSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1222,7 +1223,12 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolRunSettings::resolve(args, filesystem, invocation_source);
+            let args = settings::ToolRunSettings::resolve(
+                args,
+                filesystem,
+                invocation_source,
+                environment,
+            );
             show_settings!(args);
 
             // Initialize the cache.
@@ -1299,7 +1305,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: ToolCommand::Install(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolInstallSettings::resolve(args, filesystem);
+            let args = settings::ToolInstallSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1405,7 +1411,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: ToolCommand::Upgrade(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolUpgradeSettings::resolve(args, filesystem);
+            let args = settings::ToolUpgradeSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1458,7 +1464,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PythonCommand::List(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonListSettings::resolve(args, filesystem);
+            let args = settings::PythonListSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1515,7 +1521,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PythonCommand::Upgrade(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonUpgradeSettings::resolve(args, filesystem);
+            let args = settings::PythonUpgradeSettings::resolve(args, filesystem, environment);
             show_settings!(args);
             let upgrade = true;
 
@@ -1598,7 +1604,7 @@ async fn run(mut cli: Cli) -> Result<ExitStatus> {
             command: PythonCommand::Pin(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonPinSettings::resolve(args, filesystem);
+            let args = settings::PythonPinSettings::resolve(args, filesystem, environment);
 
             // Initialize the cache.
             let cache = cache.init()?;
@@ -1744,10 +1750,13 @@ async fn run_project(
         };
     }
 
+    // Load environment variables not handled by Clap
+    let environment = EnvironmentOptions::new()?;
+
     match *project_command {
         ProjectCommand::Init(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::InitSettings::resolve(args, filesystem);
+            let args = settings::InitSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1782,7 +1791,7 @@ async fn run_project(
         }
         ProjectCommand::Run(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::RunSettings::resolve(args, filesystem);
+            let args = settings::RunSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1846,7 +1855,7 @@ async fn run_project(
         }
         ProjectCommand::Sync(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::SyncSettings::resolve(args, filesystem);
+            let args = settings::SyncSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1896,7 +1905,7 @@ async fn run_project(
         }
         ProjectCommand::Lock(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::LockSettings::resolve(args, filesystem);
+            let args = settings::LockSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -1942,7 +1951,7 @@ async fn run_project(
         }
         ProjectCommand::Add(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let mut args = settings::AddSettings::resolve(args, filesystem);
+            let mut args = settings::AddSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // If the script already exists, use it; otherwise, propagate the file path and we'll
@@ -2065,7 +2074,7 @@ async fn run_project(
         }
         ProjectCommand::Remove(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::RemoveSettings::resolve(args, filesystem);
+            let args = settings::RemoveSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -2109,7 +2118,7 @@ async fn run_project(
         }
         ProjectCommand::Version(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::VersionSettings::resolve(args, filesystem);
+            let args = settings::VersionSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -2149,7 +2158,7 @@ async fn run_project(
         }
         ProjectCommand::Tree(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::TreeSettings::resolve(args, filesystem);
+            let args = settings::TreeSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
@@ -2194,7 +2203,7 @@ async fn run_project(
         }
         ProjectCommand::Export(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ExportSettings::resolve(args, filesystem);
+            let args = settings::ExportSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
