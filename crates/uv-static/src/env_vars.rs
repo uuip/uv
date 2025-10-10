@@ -1,6 +1,6 @@
 //! Environment variables used or supported by uv.
 //! Used to generate `docs/reference/environment.md`.
-//! NOTICE: Upcoming release functionality should be documented with `#[attr_added_in("next release")]`.
+//! NOTICE: Upcoming release functionality should be documented with `#[attr_added_in("0.9.1")]`.
 use uv_macros::{attr_added_in, attr_env_var_pattern, attr_hidden, attribute_env_vars_metadata};
 
 /// Declares all environment variable used throughout `uv` and its crates.
@@ -595,6 +595,9 @@ impl EnvVars {
     /// Comma-separated list of hostnames (e.g., `example.com`) and/or patterns (e.g., `192.168.1.0/24`) that should bypass the proxy.
     #[attr_added_in("0.1.38")]
     pub const NO_PROXY: &'static str = "NO_PROXY";
+
+    /// Timeout (in seconds) for only upload HTTP requests. (default: 900 s)
+    pub const UV_UPLOAD_HTTP_TIMEOUT: &'static str = "UV_UPLOAD_HTTP_TIMEOUT";
 
     /// Timeout (in seconds) for HTTP requests. (default: 30 s)
     #[attr_added_in("0.1.7")]

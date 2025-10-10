@@ -2,6 +2,7 @@ use itertools::{Either, Itertools};
 use regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use same_file::is_same_file;
+use std::borrow::Cow;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::{self, Debug, Formatter};
 use std::{env, io, iter};
@@ -2689,10 +2690,22 @@ impl VersionRequest {
                     interpreter.python_minor(),
                     interpreter.python_patch(),
                 ) == (*major, *minor, *patch)
+                    // When a patch version is included, we treat it as a request for a stable
+                    // release
+                    && interpreter.python_version().pre().is_none()
                     && variant.matches_interpreter(interpreter)
             }
             Self::Range(specifiers, variant) => {
-                let version = interpreter.python_version().only_release();
+                // If the specifier contains pre-releases, use the full version for comparison.
+                // Otherwise, strip pre-release so that, e.g., `>=3.14` matches `3.14.0rc3`.
+                let version = if specifiers
+                    .iter()
+                    .any(uv_pep440::VersionSpecifier::any_prerelease)
+                {
+                    Cow::Borrowed(interpreter.python_version())
+                } else {
+                    Cow::Owned(interpreter.python_version().only_release())
+                };
                 specifiers.contains(&version) && variant.matches_interpreter(interpreter)
             }
             Self::MajorMinorPrerelease(major, minor, prerelease, variant) => {
@@ -2725,7 +2738,19 @@ impl VersionRequest {
                 (version.major(), version.minor(), version.patch())
                     == (*major, *minor, Some(*patch))
             }
-            Self::Range(specifiers, _) => specifiers.contains(&version.version.only_release()),
+            Self::Range(specifiers, _) => {
+                // If the specifier contains pre-releases, use the full version for comparison.
+                // Otherwise, strip pre-release so that, e.g., `>=3.14` matches `3.14.0rc3`.
+                let version = if specifiers
+                    .iter()
+                    .any(uv_pep440::VersionSpecifier::any_prerelease)
+                {
+                    Cow::Borrowed(&version.version)
+                } else {
+                    Cow::Owned(version.version.only_release())
+                };
+                specifiers.contains(&version)
+            }
             Self::MajorMinorPrerelease(major, minor, prerelease, _) => {
                 (version.major(), version.minor(), version.pre())
                     == (*major, *minor, Some(*prerelease))
@@ -2792,6 +2817,9 @@ impl VersionRequest {
             }
             Self::MajorMinorPatch(self_major, self_minor, self_patch, _) => {
                 (*self_major, *self_minor, *self_patch) == (major, minor, patch)
+                    // When a patch version is included, we treat it as a request for a stable
+                    // release
+                    && prerelease.is_none()
             }
             Self::Range(specifiers, _) => specifiers.contains(
                 &Version::new([u64::from(major), u64::from(minor), u64::from(patch)])
