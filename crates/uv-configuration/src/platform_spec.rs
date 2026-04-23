@@ -1,3 +1,4 @@
+use std::fmt;
 use std::str::FromStr;
 
 use uv_platform_tags::Arch;
@@ -26,6 +27,17 @@ impl FromStr for PlatformOs {
     }
 }
 
+impl fmt::Display for PlatformOs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+            Self::Macos => "macos",
+        };
+        f.write_str(name)
+    }
+}
+
 /// User-facing Python implementation accepted by `uv download --implementation`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PyImpl {
@@ -44,6 +56,7 @@ impl FromStr for PyImpl {
     }
 }
 
+/// Parse a user-supplied `--machine` value into an [`Arch`].
 pub fn parse_machine(raw: &str) -> Result<Arch, String> {
     let lowered = raw.trim().to_ascii_lowercase();
     match lowered.as_str() {
@@ -58,6 +71,7 @@ pub fn parse_machine(raw: &str) -> Result<Arch, String> {
     }
 }
 
+/// Parse `MAJOR.MINOR` or `MAJOR_MINOR` into a glibc `(major, minor)` tuple.
 pub fn parse_glibc(raw: &str) -> Result<(u16, u16), String> {
     let trimmed = raw.trim();
     let parts: Vec<&str> = if trimmed.contains('.') {
@@ -83,6 +97,7 @@ pub fn parse_glibc(raw: &str) -> Result<(u16, u16), String> {
     Ok((major, minor))
 }
 
+/// Normalized, validated target description for `uv download`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PlatformSpec {
     pub os: PlatformOs,
@@ -91,13 +106,14 @@ pub struct PlatformSpec {
     pub implementation: PyImpl,
 }
 
+/// Errors produced while building or evaluating a [`PlatformSpec`].
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum PlatformSpecError {
     #[error("--glibc is only valid with --platform=linux")]
     GlibcOnNonLinux,
     #[error("only CPython is supported in this release")]
     UnsupportedImplementation,
-    #[error("{os:?} + {arch} is not a supported target platform")]
+    #[error("{os} + {arch} is not a supported target platform")]
     UnsupportedCombination { os: PlatformOs, arch: Arch },
     #[error("manylinux_2_{minor} is not supported for {arch} (supported minors: {supported:?})")]
     UnsupportedGlibc {
@@ -108,6 +124,7 @@ pub enum PlatformSpecError {
 }
 
 impl PlatformSpec {
+    /// Build a [`PlatformSpec`] from optional CLI values and host defaults.
     pub fn from_parts(
         os: Option<PlatformOs>,
         arch: Option<Arch>,
@@ -119,9 +136,6 @@ impl PlatformSpec {
         let os = os.unwrap_or(host_os);
         let arch = arch.unwrap_or(host_arch);
         let implementation = implementation.unwrap_or(PyImpl::CPython);
-        if implementation != PyImpl::CPython {
-            return Err(PlatformSpecError::UnsupportedImplementation);
-        }
         if glibc.is_some() && os != PlatformOs::Linux {
             return Err(PlatformSpecError::GlibcOnNonLinux);
         }
@@ -138,6 +152,7 @@ impl PlatformSpec {
         })
     }
 
+    /// Map this spec to an existing [`TargetTriple`] used by the resolver.
     pub fn to_target_triple(self) -> Result<TargetTriple, PlatformSpecError> {
         use Arch::{Aarch64, Riscv64, X86, X86_64};
         use PlatformOs::{Linux, Macos, Windows};
@@ -180,6 +195,20 @@ impl PlatformSpec {
                     supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 }),
             },
+            (Linux, X86_64, Some((major, minor))) if major != 2 => {
+                Err(PlatformSpecError::UnsupportedGlibc {
+                    arch: X86_64,
+                    minor,
+                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+                })
+            }
+            (Linux, Aarch64, Some((major, minor))) if major != 2 => {
+                Err(PlatformSpecError::UnsupportedGlibc {
+                    arch: Aarch64,
+                    minor,
+                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+                })
+            }
             (Linux, Riscv64, _) => Ok(TargetTriple::Riscv64UnknownLinuxGnu),
             (Windows, X86_64, None) => Ok(TargetTriple::X8664PcWindowsMsvc),
             (Windows, Aarch64, None) => Ok(TargetTriple::Aarch64PcWindowsMsvc),
@@ -370,5 +399,58 @@ mod tests {
             spec.to_target_triple(),
             Err(PlatformSpecError::UnsupportedGlibc { .. })
         ));
+    }
+
+    #[test]
+    fn target_triple_rejects_glibc_major_other_than_2() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Linux,
+            arch: Arch::X86_64,
+            glibc: Some((3, 0)),
+            implementation: PyImpl::CPython,
+        };
+        assert!(matches!(
+            spec.to_target_triple(),
+            Err(PlatformSpecError::UnsupportedGlibc { minor: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn target_triple_linux_riscv64() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Linux,
+            arch: Arch::Riscv64,
+            glibc: Some((2, 39)),
+            implementation: PyImpl::CPython,
+        };
+        assert_eq!(
+            spec.to_target_triple(),
+            Ok(TargetTriple::Riscv64UnknownLinuxGnu),
+        );
+    }
+
+    #[test]
+    fn target_triple_windows_x86() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Windows,
+            arch: Arch::X86,
+            glibc: None,
+            implementation: PyImpl::CPython,
+        };
+        assert_eq!(spec.to_target_triple(), Ok(TargetTriple::I686PcWindowsMsvc));
+    }
+
+    #[test]
+    fn target_triple_windows_aarch64() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Windows,
+            arch: Arch::Aarch64,
+            glibc: None,
+            implementation: PyImpl::CPython,
+        };
+        assert_eq!(
+            spec.to_target_triple(),
+            Ok(TargetTriple::Aarch64PcWindowsMsvc),
+        );
     }
 }

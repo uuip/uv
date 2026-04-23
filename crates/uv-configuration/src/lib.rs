@@ -20,7 +20,7 @@ pub use required_version::*;
 pub use sources::*;
 pub use target_triple::*;
 
-pub mod platform_spec;
+mod platform_spec;
 
 pub use platform_spec::{
     parse_glibc, parse_machine, PlatformOs, PlatformSpec, PlatformSpecError, PyImpl,
