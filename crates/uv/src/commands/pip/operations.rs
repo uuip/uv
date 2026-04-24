@@ -767,10 +767,9 @@ async fn execute_plan(
 
     // Download, build, and unzip any missing distributions.
     let wheels = if remote.is_empty() {
-        vec![]
+        Vec::new()
     } else {
         let start = std::time::Instant::now();
-
         let preparer = Preparer::new(
             cache,
             tags,
@@ -785,11 +784,7 @@ async fn execute_plan(
         .with_reporter(Arc::new(
             PrepareReporter::from(printer).with_length(remote.len() as u64),
         ));
-
-        let wheels = preparer
-            .prepare(remote.clone(), in_flight, resolution)
-            .await?;
-
+        let wheels = preparer.prepare(remote.clone(), in_flight, resolution).await?;
         logger.on_prepare(
             wheels.len(),
             phase.map(InstallPhase::label),
@@ -797,7 +792,6 @@ async fn execute_plan(
             printer,
             DryRun::Disabled,
         )?;
-
         wheels
     };
 

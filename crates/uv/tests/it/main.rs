@@ -34,6 +34,9 @@ mod cache_size;
 mod ecosystem;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod download;
+
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod edit;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]

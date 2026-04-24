@@ -1384,6 +1384,14 @@ impl TestContext {
         command
     }
 
+    /// Create a `uv download` command with options shared across scenarios.
+    pub fn download(&self) -> Command {
+        let mut command = self.new_command();
+        command.arg("download");
+        self.add_shared_options(&mut command, false);
+        command
+    }
+
     /// Create a `uv lock` command with options shared across scenarios.
     pub fn lock(&self) -> Command {
         let mut command = self.new_command();
