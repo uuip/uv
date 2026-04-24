@@ -545,22 +545,50 @@ fn download_no_binary_produces_sdist_only() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
+#[tokio::test]
+async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
     // Direct URL dependencies have their hashes recorded only in the lock, not on the
     // registry File. This test exercises the path where `resolution.hashes()` supplies
     // the per-dist hashes for a DirectUrl wheel.
-    const INICONFIG_URL: &str = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl";
-    const INICONFIG_SHA: &str = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374";
+    //
+    // We serve a local wheel fixture through wiremock so the test stays hermetic; a
+    // prior iteration hit files.pythonhosted.org directly, which was a source of
+    // flakiness and an external dependency.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    let server = MockServer::start().await;
+
+    let wheel_bytes = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    let wheel_sha = {
+        let mut hasher = Sha256::new();
+        hasher.update(&wheel_bytes);
+        format!("{:x}", hasher.finalize())
+    };
+
+    let wheel_url = format!(
+        "{}/files/basic_package-0.1.0-py3-none-any.whl",
+        server.uri()
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/files/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel_bytes))
+        .mount(&server)
+        .await;
+
     context.temp_dir.child("pyproject.toml").write_str(&format!(
         r#"
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig @ {INICONFIG_URL}#sha256={INICONFIG_SHA}"]
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {wheel_url}#sha256={wheel_sha}"]
         "#,
     ))?;
 
@@ -578,9 +606,9 @@ fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
         .find(|p| {
             p.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("iniconfig-"))
+                .is_some_and(|name| name.starts_with("basic_package-"))
         })
-        .ok_or_else(|| anyhow::anyhow!("no iniconfig wheel in {:?}", out.path()))?;
+        .ok_or_else(|| anyhow::anyhow!("no basic_package wheel in {:?}", out.path()))?;
 
     let bytes = fs_err::read(&wheel)?;
     let mut hasher = Sha256::new();
@@ -588,7 +616,7 @@ fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
     let actual = format!("{:x}", hasher.finalize());
 
     assert_eq!(
-        actual, INICONFIG_SHA,
+        actual, wheel_sha,
         "direct-URL wheel bytes must match the SHA advertised in the `url` fragment",
     );
     Ok(())
