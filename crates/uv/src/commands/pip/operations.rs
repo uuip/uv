@@ -738,6 +738,44 @@ impl InstallPhase {
     }
 }
 
+/// Download / build / unzip the given distributions into the cache.
+///
+/// Returns a [`Vec<CachedDist>`] pointing at on-disk artifacts. Used by both
+/// `operations::install` (during sync) and `commands::project::download`.
+pub(crate) async fn prepare(
+    dists: Vec<Arc<Dist>>,
+    in_flight: &InFlight,
+    resolution: &Resolution,
+    hasher: &HashStrategy,
+    tags: &Tags,
+    build_options: &BuildOptions,
+    client: &RegistryClient,
+    build_dispatch: &BuildDispatch<'_>,
+    cache: &Cache,
+    concurrency: &Concurrency,
+    printer: Printer,
+) -> Result<Vec<CachedDist>, Error> {
+    if dists.is_empty() {
+        return Ok(Vec::new());
+    }
+    let preparer = Preparer::new(
+        cache,
+        tags,
+        hasher,
+        build_options,
+        DistributionDatabase::new(
+            client,
+            build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+        ),
+    )
+    .with_reporter(Arc::new(
+        PrepareReporter::from(printer).with_length(dists.len() as u64),
+    ));
+
+    Ok(preparer.prepare(dists, in_flight, resolution).await?)
+}
+
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
@@ -767,29 +805,23 @@ async fn execute_plan(
 
     // Download, build, and unzip any missing distributions.
     let wheels = if remote.is_empty() {
-        vec![]
+        Vec::new()
     } else {
         let start = std::time::Instant::now();
-
-        let preparer = Preparer::new(
-            cache,
-            tags,
+        let wheels = prepare(
+            remote.clone(),
+            in_flight,
+            resolution,
             hasher,
+            tags,
             build_options,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            client,
+            build_dispatch,
+            cache,
+            concurrency,
+            printer,
         )
-        .with_reporter(Arc::new(
-            PrepareReporter::from(printer).with_length(remote.len() as u64),
-        ));
-
-        let wheels = preparer
-            .prepare(remote.clone(), in_flight, resolution)
-            .await?;
-
+        .await?;
         logger.on_prepare(
             wheels.len(),
             phase.map(InstallPhase::label),
@@ -797,7 +829,6 @@ async fn execute_plan(
             printer,
             DryRun::Disabled,
         )?;
-
         wheels
     };
 
