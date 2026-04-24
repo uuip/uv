@@ -30,7 +30,7 @@ fn download_basic_native_platform() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 2 packages in [TIME]
-    Downloaded 1 package (0 skipped) to [TEMP_DIR]/pkgs
+    Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
     ");
 
     // The wheel should have been materialized.
@@ -269,7 +269,7 @@ fn download_reruns_are_idempotent() -> Result<()> {
         .assert()
         .success();
 
-    // Second run should report 0 written and 1 skipped.
+    // Second run should report 0 written and 1 already-existed.
     uv_snapshot!(
         context.filters(),
         context.download().arg("-o").arg(out.path()),
@@ -281,7 +281,7 @@ fn download_reruns_are_idempotent() -> Result<()> {
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Resolved 2 packages in [TIME]
-        Downloaded 0 packages (1 skipped) to [TEMP_DIR]/pkgs
+        Downloaded 0 packages (1 already existed) to [TEMP_DIR]/pkgs
         "
     );
     Ok(())

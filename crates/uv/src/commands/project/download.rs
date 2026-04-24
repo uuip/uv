@@ -390,13 +390,16 @@ pub(crate) async fn download(
         }
     }
 
-    // 12. Print a summary.
+    // 12. Print a summary. `already_existed` counts artifacts that were present
+    // from a previous run and left untouched; dependencies that cannot be
+    // materialized (git, local path, workspace members) surface their own
+    // `Skipping ...` warnings above and are not included in either count.
     writeln!(
         printer.stderr(),
-        "Downloaded {} package{} ({} skipped) to {}",
+        "Downloaded {} package{} ({} already existed) to {}",
         report.written,
         if report.written == 1 { "" } else { "s" },
-        report.skipped,
+        report.already_existed,
         output_dir.display().cyan(),
     )?;
 
@@ -425,21 +428,22 @@ fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> Insta
 #[derive(Clone, Copy)]
 enum MaterializeOutcome {
     Written,
-    Skipped,
+    /// The target file was already present from a previous run.
+    AlreadyExisted,
 }
 
 /// Summary of a download run.
 #[derive(Default)]
 struct DownloadReport {
     written: usize,
-    skipped: usize,
+    already_existed: usize,
 }
 
 impl DownloadReport {
     fn record(&mut self, outcome: MaterializeOutcome) {
         match outcome {
             MaterializeOutcome::Written => self.written += 1,
-            MaterializeOutcome::Skipped => self.skipped += 1,
+            MaterializeOutcome::AlreadyExisted => self.already_existed += 1,
         }
     }
 }
@@ -456,30 +460,74 @@ fn spawn_download(
     let client = Arc::clone(client);
     let semaphore = Arc::clone(semaphore);
     tasks.spawn(async move {
-        // The semaphore is never closed, so `acquire_owned` only fails if all permits
-        // are permanently dropped, which we don't do.
-        let _permit = semaphore.acquire_owned().await.ok();
+        // `concurrency.downloads_semaphore` is constructed once in `Concurrency::new`
+        // and lives for the duration of the command; it is not expected to close.
+        // Surface the close as a real error rather than silently bypassing the
+        // rate limit if a future refactor ever triggers it.
+        let _permit = semaphore
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow::anyhow!("downloads semaphore was unexpectedly closed"))?;
         download_to(&client, url, &dst, &expected).await
     });
+}
+
+/// RAII guard over a `.partial-<nonce>` file.
+///
+/// Removes the partial file when dropped — including when a spawned task is
+/// cancelled mid-download via `JoinSet::abort_all()`. Without this guard, an
+/// aborted task leaves its partial behind because the explicit cleanup branches
+/// in `download_to` never run once the future is dropped at an `.await` point.
+///
+/// After a successful rename the partial path no longer exists, so the drop-time
+/// `remove_file` call is a harmless no-op.
+struct PartialFile(PathBuf);
+
+impl PartialFile {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for PartialFile {
+    fn drop(&mut self) {
+        let _ = fs_err::remove_file(&self.0);
+    }
 }
 
 /// Stream a remote URL directly to `dst`, verifying hashes when present.
 ///
 /// The response body is chunked to disk via `bytes_stream()` so we never hold the
 /// full artifact in memory; hashes are updated incrementally as each chunk arrives.
-/// Bytes land in a `.partial-<nonce>` sibling first and are renamed on success. On
-/// any failure the partial file is removed and the error is propagated.
+/// Bytes land in a `.partial-<nonce>` sibling first and are renamed on success. A
+/// [`PartialFile`] RAII guard removes the partial on any early return — including
+/// async cancellation — and becomes a no-op once the file has been renamed.
 async fn download_to(
     client: &RegistryClient,
     url: DisplaySafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
 ) -> Result<MaterializeOutcome> {
-    if dst.exists() {
-        return Ok(MaterializeOutcome::Skipped);
+    // Only treat an existing regular file as already-materialized. Directories,
+    // symlinks, or other exotica are an error so we don't silently skip them.
+    match fs_err::symlink_metadata(dst) {
+        Ok(metadata) if metadata.is_file() => return Ok(MaterializeOutcome::AlreadyExisted),
+        Ok(_) => bail!(
+            "refusing to overwrite non-file entry at `{}`",
+            dst.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "failed to stat `{}`: {err}",
+                dst.display()
+            ));
+        }
     }
 
-    let partial = dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple()));
+    let partial = PartialFile(
+        dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())),
+    );
 
     let response = client
         .uncached_client(&url)
@@ -498,48 +546,33 @@ async fn download_to(
         .map(|h| Hasher::from(h.algorithm))
         .collect();
 
-    let mut file = fs_err::tokio::File::create(&partial)
+    let mut file = fs_err::tokio::File::create(partial.path())
         .await
-        .map_err(|err| anyhow::anyhow!("failed to create `{}`: {err}", partial.display()))?;
+        .map_err(|err| {
+            anyhow::anyhow!("failed to create `{}`: {err}", partial.path().display())
+        })?;
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
-            Err(err) => {
-                drop(file);
-                let _ = fs_err::tokio::remove_file(&partial).await;
-                return Err(anyhow::anyhow!("failed to read body of `{url}`: {err}"));
-            }
-        };
+        let chunk = chunk
+            .map_err(|err| anyhow::anyhow!("failed to read body of `{url}`: {err}"))?;
         for hasher in &mut hashers {
             hasher.update(&chunk);
         }
-        if let Err(err) = file.write_all(&chunk).await {
-            drop(file);
-            let _ = fs_err::tokio::remove_file(&partial).await;
-            return Err(anyhow::anyhow!(
-                "failed to write `{}`: {err}",
-                partial.display()
-            ));
-        }
+        file.write_all(&chunk).await.map_err(|err| {
+            anyhow::anyhow!("failed to write `{}`: {err}", partial.path().display())
+        })?;
     }
 
-    if let Err(err) = file.flush().await {
-        drop(file);
-        let _ = fs_err::tokio::remove_file(&partial).await;
-        return Err(anyhow::anyhow!(
-            "failed to flush `{}`: {err}",
-            partial.display()
-        ));
-    }
+    file.flush().await.map_err(|err| {
+        anyhow::anyhow!("failed to flush `{}`: {err}", partial.path().display())
+    })?;
     drop(file);
 
     // Verify hashes before renaming.
     for (expected, hasher) in expected_hashes.iter().zip(hashers) {
         let actual: uv_pypi_types::HashDigest = hasher.into();
         if actual.digest != expected.digest {
-            let _ = fs_err::tokio::remove_file(&partial).await;
             bail!(
                 "hash mismatch for `{url}`:\n  expected {}: {}\n  actual   {}: {}",
                 expected.algorithm,
@@ -550,13 +583,8 @@ async fn download_to(
         }
     }
 
-    if let Err(err) = fs_err::rename(&partial, dst) {
-        let _ = fs_err::remove_file(&partial);
-        return Err(anyhow::anyhow!(
-            "failed to finalize `{}`: {err}",
-            dst.display()
-        ));
-    }
+    fs_err::rename(partial.path(), dst)
+        .map_err(|err| anyhow::anyhow!("failed to finalize `{}`: {err}", dst.display()))?;
 
     Ok(MaterializeOutcome::Written)
 }
@@ -580,8 +608,19 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
 
 /// Hard-link or copy a local path artifact into the output directory.
 fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
-    if dst.exists() {
-        return Ok(MaterializeOutcome::Skipped);
+    match fs_err::symlink_metadata(dst) {
+        Ok(metadata) if metadata.is_file() => return Ok(MaterializeOutcome::AlreadyExisted),
+        Ok(_) => bail!(
+            "refusing to overwrite non-file entry at `{}`",
+            dst.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "failed to stat `{}`: {err}",
+                dst.display()
+            ));
+        }
     }
     if let Err(_link_err) = fs_err::hard_link(src, dst) {
         warn!(
