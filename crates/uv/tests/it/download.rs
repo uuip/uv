@@ -544,3 +544,52 @@ fn download_no_binary_produces_sdist_only() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
+    // Direct URL dependencies have their hashes recorded only in the lock, not on the
+    // registry File. This test exercises the path where `resolution.hashes()` supplies
+    // the per-dist hashes for a DirectUrl wheel.
+    const INICONFIG_URL: &str = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl";
+    const INICONFIG_SHA: &str = "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374";
+
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(&format!(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig @ {INICONFIG_URL}#sha256={INICONFIG_SHA}"]
+        "#,
+    ))?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let wheel = fs_err::read_dir(out.path())?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("iniconfig-"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("no iniconfig wheel in {:?}", out.path()))?;
+
+    let bytes = fs_err::read(&wheel)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let actual = format!("{:x}", hasher.finalize());
+
+    assert_eq!(
+        actual, INICONFIG_SHA,
+        "direct-URL wheel bytes must match the SHA advertised in the `url` fragment",
+    );
+    Ok(())
+}

@@ -78,9 +78,11 @@ Dependencies that cannot be materialized into a portable wheel are skipped with 
 - `git` sources.
 
 The remaining resolved distributions are downloaded as `.whl` or `.tar.gz` files directly from the
-index, without any extraction or re-archiving. The output files are byte-identical to what was
-published on the index; their SHA-256 matches the hashes in `uv.lock`, so downstream tools like
-`pip install --require-hashes` will accept them.
+index, without any extraction or re-archiving. Registry and direct-URL artifacts are streamed
+byte-for-byte from the upstream URL and, when `uv.lock` records hashes for them, their SHA-256 is
+verified on the way in. That means the output matches what was published on the index, so downstream
+tools such as `pip install --require-hashes` will accept it. Local `path` wheels are copied or
+hard-linked from disk; their bytes are whatever you point the dependency at.
 
 ## See also
 

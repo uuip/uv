@@ -19,7 +19,7 @@ use uv_extract::hash::Hasher;
 use uv_normalize::DefaultExtras;
 use uv_platform_tags::Arch;
 use uv_preview::Preview;
-use uv_pypi_types::HashDigests;
+use uv_pypi_types::HashDigest;
 use uv_python::{Interpreter, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{Installable, Lock};
@@ -285,7 +285,7 @@ pub(crate) async fn download(
     let mut report = DownloadReport::default();
     let root_name = project.workspace().pyproject_toml().project.as_ref().map(|p| &p.name);
 
-    for resolved in resolution.distributions() {
+    for (resolved, hashes) in resolution.hashes() {
         let ResolvedDist::Installable { dist, .. } = resolved else {
             continue;
         };
@@ -294,7 +294,14 @@ pub(crate) async fn download(
                 let wheel = built.best_wheel();
                 let url = wheel.file.url.to_url()?;
                 let dst = output_dir.join(wheel.file.filename.as_ref());
-                download_to(&client, url, &dst, &wheel.file.hashes, &mut report).await?;
+                // Prefer the per-file hashes published on the index; fall back to the
+                // lock-level hashes (both are authoritative for registry wheels).
+                let expected = if wheel.file.hashes.is_empty() {
+                    hashes
+                } else {
+                    wheel.file.hashes.as_slice()
+                };
+                download_to(&client, url, &dst, expected, &mut report).await?;
             }
             Dist::Built(BuiltDist::DirectUrl(direct)) => {
                 let dst = output_dir.join(direct.filename.to_string());
@@ -302,7 +309,7 @@ pub(crate) async fn download(
                     &client,
                     (*direct.location).clone(),
                     &dst,
-                    &HashDigests::empty(),
+                    hashes,
                     &mut report,
                 )
                 .await?;
@@ -314,20 +321,26 @@ pub(crate) async fn download(
             Dist::Source(SourceDist::Registry(source)) => {
                 let url = source.file.url.to_url()?;
                 let dst = output_dir.join(source.file.filename.as_ref());
-                download_to(&client, url, &dst, &source.file.hashes, &mut report).await?;
+                let expected = if source.file.hashes.is_empty() {
+                    hashes
+                } else {
+                    source.file.hashes.as_slice()
+                };
+                download_to(&client, url, &dst, expected, &mut report).await?;
             }
             Dist::Source(SourceDist::DirectUrl(direct)) => {
-                let filename = direct
+                let raw = direct
                     .filename()
                     .ok()
                     .map(|f: std::borrow::Cow<'_, str>| f.into_owned())
                     .unwrap_or_else(|| format!("{}.{}", direct.name, direct.ext));
+                let filename = sanitize_artifact_filename(&raw)?;
                 let dst = output_dir.join(filename);
                 download_to(
                     &client,
                     (*direct.location).clone(),
                     &dst,
-                    &HashDigests::empty(),
+                    hashes,
                     &mut report,
                 )
                 .await?;
@@ -405,7 +418,7 @@ async fn download_to(
     client: &uv_client::RegistryClient,
     url: DisplaySafeUrl,
     dst: &Path,
-    expected_hashes: &HashDigests,
+    expected_hashes: &[HashDigest],
     report: &mut DownloadReport,
 ) -> Result<()> {
     if dst.exists() {
@@ -475,6 +488,23 @@ async fn download_to(
     Ok(())
 }
 
+/// Accept an artifact filename only if it is a single harmless path segment.
+///
+/// Direct URL sources derive their filename from the (percent-decoded) last path segment
+/// of the remote URL. That segment can in principle contain path separators or traversal
+/// markers if the URL is malicious or malformed; joining such a name onto `--output-dir`
+/// would let us write outside the requested directory.
+fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        bail!("refusing to materialize artifact with empty or traversal filename: `{raw}`");
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        bail!("refusing to materialize artifact with path separator in filename: `{raw}`");
+    }
+    Ok(trimmed)
+}
+
 /// Hard-link or copy a local path artifact into the output directory.
 fn copy_or_link(src: &Path, dst: &Path, report: &mut DownloadReport) -> Result<()> {
     if dst.exists() {
@@ -497,4 +527,36 @@ fn copy_or_link(src: &Path, dst: &Path, report: &mut DownloadReport) -> Result<(
     }
     report.written += 1;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_artifact_filename;
+
+    #[test]
+    fn sanitize_accepts_normal_filenames() {
+        assert_eq!(
+            sanitize_artifact_filename("iniconfig-2.0.0-py3-none-any.whl").unwrap(),
+            "iniconfig-2.0.0-py3-none-any.whl",
+        );
+        assert_eq!(
+            sanitize_artifact_filename("  foo-1.0.tar.gz  ").unwrap(),
+            "foo-1.0.tar.gz",
+        );
+    }
+
+    #[test]
+    fn sanitize_rejects_path_separators() {
+        assert!(sanitize_artifact_filename("../secret.whl").is_err());
+        assert!(sanitize_artifact_filename("dir/inner.whl").is_err());
+        assert!(sanitize_artifact_filename("dir\\inner.whl").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_empty_and_dot_filenames() {
+        assert!(sanitize_artifact_filename("").is_err());
+        assert!(sanitize_artifact_filename("   ").is_err());
+        assert!(sanitize_artifact_filename(".").is_err());
+        assert!(sanitize_artifact_filename("..").is_err());
+    }
 }
