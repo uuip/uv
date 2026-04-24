@@ -1771,7 +1771,6 @@ impl SyncSettings {
 
 /// The resolved settings to use for a `download` invocation.
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "wired in Task 6")]
 pub(crate) struct DownloadSettings {
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
@@ -1790,7 +1789,6 @@ pub(crate) struct DownloadSettings {
 
 impl DownloadSettings {
     /// Resolve the [`DownloadSettings`] from the CLI and filesystem configuration.
-    #[expect(dead_code, reason = "wired in Task 6")]
     pub(crate) fn resolve(
         args: DownloadArgs,
         filesystem: Option<FilesystemOptions>,

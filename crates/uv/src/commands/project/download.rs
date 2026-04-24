@@ -47,7 +47,6 @@ use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 /// wheels into uv's cache, and then materializes them as `.whl` archives in the output directory.
 /// No virtual environment is created or modified.
 #[expect(clippy::too_many_arguments)]
-#[expect(dead_code, reason = "wired in Task 6")]
 pub(crate) async fn download(
     project_dir: &Path,
     lock_check: LockCheck,
