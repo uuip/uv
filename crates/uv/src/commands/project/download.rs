@@ -38,6 +38,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     ProjectError, ProjectInterpreter, UniversalState, WorkspacePython, default_dependency_groups,
 };
+use crate::commands::reporters::DownloadProjectReporter;
 use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
@@ -289,6 +290,25 @@ pub(crate) async fn download(
     //     Downloads run in parallel, gated by `concurrency.downloads_semaphore` to mirror
     //     the rate-limiting behaviour of `uv sync`'s preparer. Local copy/link and skip
     //     arms run inline because they don't issue network requests.
+    //
+    //     The reporter length counts only artifacts that actually hit the network so the
+    //     top-level `(pos/len)` matches the spawned task count — local hard-link/copy
+    //     entries and skipped variants are not tallied.
+    let remote_count = resolution
+        .hashes()
+        .filter(|(resolved, _)| {
+            let ResolvedDist::Installable { dist, .. } = resolved else {
+                return false;
+            };
+            matches!(
+                dist.as_ref(),
+                Dist::Built(BuiltDist::Registry(_) | BuiltDist::DirectUrl(_))
+                    | Dist::Source(SourceDist::Registry(_) | SourceDist::DirectUrl(_))
+            )
+        })
+        .count() as u64;
+    let reporter = Arc::new(DownloadProjectReporter::new(printer, remote_count));
+
     let mut report = DownloadReport::default();
     let root_name = project.workspace().pyproject_toml().project.as_ref().map(|p| &p.name);
     let semaphore = concurrency.downloads_semaphore.clone();
@@ -311,14 +331,14 @@ pub(crate) async fn download(
                 } else {
                     wheel.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
             }
             Dist::Built(BuiltDist::DirectUrl(direct)) => {
                 let filename = sanitize_artifact_filename(&direct.filename.to_string())?.to_owned();
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
             }
             Dist::Built(BuiltDist::Path(local)) => {
                 let dst = output_dir.join(local.filename.to_string());
@@ -333,7 +353,7 @@ pub(crate) async fn download(
                 } else {
                     source.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
             }
             Dist::Source(SourceDist::DirectUrl(direct)) => {
                 let raw = direct
@@ -345,7 +365,7 @@ pub(crate) async fn download(
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
             }
             Dist::Source(SourceDist::Git(git)) => {
                 warn_user!(
@@ -389,6 +409,8 @@ pub(crate) async fn download(
             }
         }
     }
+
+    reporter.on_complete();
 
     // 12. Print a summary. `already_existed` counts artifacts that were present
     // from a previous run and left untouched; dependencies that cannot be
@@ -448,16 +470,20 @@ impl DownloadReport {
 }
 
 /// Spawn a streaming download task onto `tasks`, gated by `semaphore`.
+#[expect(clippy::too_many_arguments)]
 fn spawn_download(
     tasks: &mut JoinSet<Result<MaterializeOutcome>>,
     client: &Arc<RegistryClient>,
     semaphore: &Arc<Semaphore>,
+    reporter: &Arc<DownloadProjectReporter>,
+    name: String,
     url: DisplaySafeUrl,
     dst: PathBuf,
     expected: Vec<HashDigest>,
 ) {
     let client = Arc::clone(client);
     let semaphore = Arc::clone(semaphore);
+    let reporter = Arc::clone(reporter);
     tasks.spawn(async move {
         // `concurrency.downloads_semaphore` is constructed once in `Concurrency::new`
         // and lives for the duration of the command; it is not expected to close.
@@ -467,7 +493,11 @@ fn spawn_download(
             .acquire_owned()
             .await
             .map_err(|_| anyhow::anyhow!("downloads semaphore was unexpectedly closed"))?;
-        download_to(&client, url, &dst, &expected).await
+        let outcome = download_to(&client, &reporter, name, url, &dst, &expected).await?;
+        // Tick the root counter whether we actually downloaded or short-circuited on
+        // an existing file, so `(pos/len)` reflects work finished, not bytes moved.
+        reporter.on_task_done();
+        Ok(outcome)
     });
 }
 
@@ -503,6 +533,8 @@ impl Drop for PartialFile {
 /// async cancellation — and becomes a no-op once the file has been renamed.
 async fn download_to(
     client: &RegistryClient,
+    reporter: &DownloadProjectReporter,
+    name: String,
     url: DisplaySafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
@@ -540,6 +572,11 @@ async fn download_to(
         bail!("failed to fetch `{url}`: HTTP {status}");
     }
 
+    // Open the per-artifact progress bar once the server commits to a `Content-Length`
+    // (missing for chunked/compressed responses — the bar then falls back to a spinner).
+    let size = response.content_length();
+    let progress_id = reporter.on_download_start(name, size);
+
     let mut hashers: Vec<Hasher> = expected_hashes
         .iter()
         .map(|h| Hasher::from(h.algorithm))
@@ -561,6 +598,7 @@ async fn download_to(
         file.write_all(&chunk).await.map_err(|err| {
             anyhow::anyhow!("failed to write `{}`: {err}", partial.path().display())
         })?;
+        reporter.on_download_progress(progress_id, chunk.len() as u64);
     }
 
     file.flush().await.map_err(|err| {
@@ -584,6 +622,8 @@ async fn download_to(
 
     fs_err::rename(partial.path(), dst)
         .map_err(|err| anyhow::anyhow!("failed to finalize `{}`: {err}", dst.display()))?;
+
+    reporter.on_download_complete(progress_id);
 
     Ok(MaterializeOutcome::Written)
 }
