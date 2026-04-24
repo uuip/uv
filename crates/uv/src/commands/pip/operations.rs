@@ -740,8 +740,8 @@ impl InstallPhase {
 
 /// Download / build / unzip the given distributions into the cache.
 ///
-/// Returns a [`Vec<CachedDist>`] pointing at on-disk artifacts. Used by both
-/// `operations::install` (during sync) and `commands::project::download`.
+/// Returns a list of [`CachedDist`] pointing at on-disk artifacts. Used by
+/// both `operations::install` (during sync) and `commands::project::download`.
 pub(crate) async fn prepare(
     dists: Vec<Arc<Dist>>,
     in_flight: &InFlight,
