@@ -115,9 +115,10 @@ pub enum PlatformSpecError {
     UnsupportedImplementation,
     #[error("{os} + {arch} is not a supported target platform")]
     UnsupportedCombination { os: PlatformOs, arch: Arch },
-    #[error("manylinux_2_{minor} is not supported for {arch} (supported minors: {supported:?})")]
+    #[error("glibc {major}.{minor} is not supported for {arch} (supported glibc versions: 2.{supported:?})")]
     UnsupportedGlibc {
         arch: Arch,
+        major: u16,
         minor: u16,
         supported: &'static [u16],
     },
@@ -172,6 +173,7 @@ impl PlatformSpec {
                 40 => Ok(TargetTriple::X8664Manylinux240),
                 _ => Err(PlatformSpecError::UnsupportedGlibc {
                     arch: X86_64,
+                    major: 2,
                     minor,
                     supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 }),
@@ -191,6 +193,7 @@ impl PlatformSpec {
                 40 => Ok(TargetTriple::Aarch64Manylinux240),
                 _ => Err(PlatformSpecError::UnsupportedGlibc {
                     arch: Aarch64,
+                    major: 2,
                     minor,
                     supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 }),
@@ -198,6 +201,7 @@ impl PlatformSpec {
             (Linux, X86_64, Some((major, minor))) if major != 2 => {
                 Err(PlatformSpecError::UnsupportedGlibc {
                     arch: X86_64,
+                    major,
                     minor,
                     supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 })
@@ -205,6 +209,7 @@ impl PlatformSpec {
             (Linux, Aarch64, Some((major, minor))) if major != 2 => {
                 Err(PlatformSpecError::UnsupportedGlibc {
                     arch: Aarch64,
+                    major,
                     minor,
                     supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 })
@@ -397,7 +402,7 @@ mod tests {
         };
         assert!(matches!(
             spec.to_target_triple(),
-            Err(PlatformSpecError::UnsupportedGlibc { .. })
+            Err(PlatformSpecError::UnsupportedGlibc { major: 2, .. })
         ));
     }
 
@@ -411,7 +416,35 @@ mod tests {
         };
         assert!(matches!(
             spec.to_target_triple(),
-            Err(PlatformSpecError::UnsupportedGlibc { minor: 0, .. })
+            Err(PlatformSpecError::UnsupportedGlibc { major: 3, minor: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn unsupported_glibc_error_message_includes_major_and_minor() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Linux,
+            arch: Arch::X86_64,
+            glibc: Some((3, 0)),
+            implementation: PyImpl::CPython,
+        };
+        let err = spec.to_target_triple().unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("glibc 3.0"), "got: {message}");
+        assert!(message.contains("x86_64"), "got: {message}");
+    }
+
+    #[test]
+    fn target_triple_rejects_glibc_major_other_than_2_aarch64() {
+        let spec = PlatformSpec {
+            os: PlatformOs::Linux,
+            arch: Arch::Aarch64,
+            glibc: Some((3, 0)),
+            implementation: PyImpl::CPython,
+        };
+        assert!(matches!(
+            spec.to_target_triple(),
+            Err(PlatformSpecError::UnsupportedGlibc { major: 3, minor: 0, .. })
         ));
     }
 
