@@ -17,7 +17,7 @@ use uv_configuration::{
     Concurrency, DependencyGroups, DependencyGroupsWithDefaults, ExtrasSpecification,
     InstallOptions, PlatformOs, PlatformSpec, PyImpl, TargetTriple,
 };
-use uv_distribution_types::{BuiltDist, Dist, RemoteSource, ResolvedDist, SourceDist};
+use uv_distribution_types::{BuiltDist, Dist, IndexUrl, RemoteSource, ResolvedDist, SourceDist};
 use uv_extract::hash::Hasher;
 use uv_normalize::DefaultExtras;
 use uv_platform_tags::Arch;
@@ -275,6 +275,39 @@ pub(crate) async fn download(
     let keyring_provider = settings.resolver.keyring_provider;
     let client_builder = client_builder.clone().keyring(keyring_provider);
 
+    // If the user explicitly pointed `--default-index` at a non-PyPI mirror, rewrite the
+    // Registry artifact URLs stored in the lockfile to point at that mirror. The lockfile
+    // bakes in whatever URL the original resolve saw (typically `files.pythonhosted.org`
+    // for PyPI), so without this, passing `--default-index` to `uv download` would have
+    // no effect on a pre-existing lock. The mirror base is derived by stripping the
+    // trailing `simple` segment from the index URL, which matches the layout published by
+    // bandersnatch-style mirrors (Tsinghua, USTC, Aliyun). Warn rather than silently
+    // ignore the flag when the shape is one we don't know how to turn into a file base —
+    // a silent no-op here is confusing, especially for local-path indexes.
+    let mirror_base = match index_locations.default_index() {
+        Some(index) if matches!(index.url, IndexUrl::Pypi(_)) => None,
+        Some(index) => match (&index.url, index.url.root()) {
+            (IndexUrl::Path(_), _) => {
+                warn_user!(
+                    "`--default-index` points at a local path; `uv download` cannot rewrite \
+                     recorded artifact URLs to a filesystem index and will use the URLs in \
+                     `uv.lock` as-is"
+                );
+                None
+            }
+            (_, None) => {
+                warn_user!(
+                    "`--default-index` was provided but its URL does not end in `simple` / \
+                     `+simple`; `uv download` does not know how to derive a mirror file \
+                     base and will use the URLs in `uv.lock` as-is"
+                );
+                None
+            }
+            (_, Some(root)) => Some(root),
+        },
+        None => None,
+    };
+
     let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(index_strategy)
@@ -321,7 +354,7 @@ pub(crate) async fn download(
         match dist.as_ref() {
             Dist::Built(BuiltDist::Registry(built)) => {
                 let wheel = built.best_wheel();
-                let url = wheel.file.url.to_url()?;
+                let url = rewrite_registry_url(wheel.file.url.to_url()?, mirror_base.as_ref());
                 let filename = sanitize_artifact_filename(wheel.file.filename.as_ref())?.to_owned();
                 let dst = output_dir.join(&filename);
                 // Prefer the per-file hashes published on the index; fall back to the
@@ -345,7 +378,7 @@ pub(crate) async fn download(
                 report.record(copy_or_link(&local.install_path, &dst)?);
             }
             Dist::Source(SourceDist::Registry(source)) => {
-                let url = source.file.url.to_url()?;
+                let url = rewrite_registry_url(source.file.url.to_url()?, mirror_base.as_ref());
                 let filename = sanitize_artifact_filename(source.file.filename.as_ref())?.to_owned();
                 let dst = output_dir.join(&filename);
                 let expected: Vec<HashDigest> = if source.file.hashes.is_empty() {
@@ -645,6 +678,54 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
     Ok(trimmed)
 }
 
+/// The host served by PyPI for distribution artifacts (wheels, sdists).
+///
+/// Narrows [`rewrite_registry_url`] to the one host we know bandersnatch-style mirrors
+/// actually clone from. Lockfiles with artifact URLs pointing at a custom/corporate index
+/// with its own layout are left untouched — rewriting them to `{mirror}/packages/...`
+/// would silently 404 and the user would have no way to tell what happened.
+const PYPI_FILE_HOST: &str = "files.pythonhosted.org";
+
+/// Rewrite a PyPI-hosted Registry artifact URL to point at a user-specified mirror.
+///
+/// Called only by `uv download`, and only in memory — the `uv.lock` file on disk is never
+/// modified. Rewriting triggers only when:
+///   1. the caller passed a `mirror_base` (i.e. `--default-index` was set to something
+///      other than the built-in PyPI),
+///   2. the original URL's host is [`PYPI_FILE_HOST`], and
+///   3. the original URL's path contains `/packages/` (the standard layout shared by PyPI
+///      and its bandersnatch-style mirrors — Tsinghua, USTC, Aliyun).
+///
+/// The resulting URL is `{mirror_base}/packages/...` with the original query and fragment
+/// preserved so per-file hash fragments (`#sha256=...`) continue to round-trip. The SHA-256
+/// digest recorded in the lockfile is still verified against the downloaded bytes, so a
+/// misconfigured mirror surfaces as a hash mismatch rather than a silent substitution.
+fn rewrite_registry_url(
+    original: DisplaySafeUrl,
+    mirror_base: Option<&DisplaySafeUrl>,
+) -> DisplaySafeUrl {
+    let Some(base) = mirror_base else {
+        return original;
+    };
+    if original.host_str() != Some(PYPI_FILE_HOST) {
+        return original;
+    }
+    let Some(idx) = original.path().find("/packages/") else {
+        return original;
+    };
+    let packages_suffix = original.path()[idx..].to_owned();
+
+    // Clone the mirror base and graft on the `/packages/...` path from the original URL.
+    // Going through `url::Url::set_*` (rather than string concatenation) keeps auth,
+    // port, and percent-encoding handled by the crate instead of us.
+    let mut rewritten = base.clone();
+    let trimmed_base_path = rewritten.path().trim_end_matches('/').to_owned();
+    rewritten.set_path(&format!("{trimmed_base_path}{packages_suffix}"));
+    rewritten.set_query(original.query());
+    rewritten.set_fragment(original.fragment());
+    rewritten
+}
+
 /// Hard-link or copy a local path artifact into the output directory.
 fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
     match fs_err::symlink_metadata(dst) {
@@ -680,7 +761,114 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_artifact_filename;
+    use super::{rewrite_registry_url, sanitize_artifact_filename};
+    use uv_redacted::DisplaySafeUrl;
+
+    fn url(s: &str) -> DisplaySafeUrl {
+        DisplaySafeUrl::parse(s).unwrap()
+    }
+
+    #[test]
+    fn rewrite_passthrough_without_mirror() {
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0-py3-none-any.whl");
+        let rewritten = rewrite_registry_url(original.clone(), None);
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_ustc_mirror() {
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl#sha256=deadbeef",
+        );
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi/");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl#sha256=deadbeef",
+        );
+    }
+
+    #[test]
+    fn rewrite_tsinghua_mirror_strips_trailing_slash() {
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz");
+        // `IndexUrl::root()` normally returns a URL without a trailing slash; accept either
+        // form defensively so manual callers (and tests) don't need to care.
+        let mirror = url("https://pypi.tuna.tsinghua.edu.cn/");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://pypi.tuna.tsinghua.edu.cn/packages/aa/bb/foo-1.0.tar.gz",
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_query() {
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz?token=abc#sha256=beef",
+        );
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/foo-1.0.tar.gz?token=abc#sha256=beef",
+        );
+    }
+
+    #[test]
+    fn rewrite_skips_non_pypi_style_paths() {
+        // A URL without `/packages/` in the path (e.g. a custom index that uses a different
+        // layout) is left untouched — we don't have enough information to know where the
+        // mirror would serve the file.
+        let original = url("https://files.pythonhosted.org/wheels/foo-1.0-py3-none-any.whl");
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original.clone(), Some(&mirror));
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_skips_non_pypi_hosts() {
+        // URLs from corporate/custom indexes (anything other than files.pythonhosted.org)
+        // are left alone. Rewriting them to `{mirror}/packages/...` would silently 404
+        // because mirrors clone from PyPI, not from the custom index.
+        let original = url("https://corp.example.com/artifactory/pypi/packages/foo.whl");
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original.clone(), Some(&mirror));
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_end_to_end_via_index_url_root() {
+        // Drive the full pipeline: IndexUrl::parse → .root() → rewrite. This catches
+        // behavior changes in `IndexUrl::root()` or in how `DisplaySafeUrl` round-trips
+        // the trailing slash after `pop_if_empty().pop()`.
+        use uv_distribution_types::IndexUrl;
+
+        // With trailing slash on --default-index.
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple/", None).unwrap();
+        let base = index.root().unwrap();
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+        let rewritten = rewrite_registry_url(original, Some(&base));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+
+        // Without trailing slash on --default-index.
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple", None).unwrap();
+        let base = index.root().unwrap();
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+        let rewritten = rewrite_registry_url(original, Some(&base));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+    }
 
     #[test]
     fn sanitize_accepts_normal_filenames() {

@@ -694,18 +694,36 @@ impl uv_python::downloads::Reporter for PythonDownloadReporter {
 /// Progress reporter for `uv download`, which streams wheel/sdist artifacts directly to
 /// the output directory without going through the preparer.
 ///
-/// Mirrors [`PrepareReporter`] — a top-level "Downloading packages..." spinner with
-/// `(pos/len)` counter and per-artifact byte-level sub-bars — but is wired directly to
-/// the raw HTTP stream in `download` instead of the installer's preparer.
+/// A top-level "Downloading packages..." spinner with `(pos/len)` counter, plus per-artifact
+/// byte-level sub-bars laid out on two lines (filename on one, bar + bytes on the next).
+/// Wheel filenames with manylinux tags routinely exceed 90 characters, which overflows any
+/// single-line template the moment a bar is appended — so the two-line layout is what keeps
+/// the display readable regardless of terminal width.
 #[derive(Debug)]
 pub(crate) struct DownloadProjectReporter {
-    reporter: ProgressReporter,
+    printer: Printer,
+    /// `None` in environments that do not render concurrent progress bars well (e.g. Jupyter).
+    multi: Option<DownloadMulti>,
+    root: ProgressBar,
+}
+
+#[derive(Debug)]
+struct DownloadMulti {
+    multi_progress: MultiProgress,
+    state: Arc<Mutex<DownloadBarState>>,
+}
+
+#[derive(Debug, Default)]
+struct DownloadBarState {
+    bars: FxHashMap<usize, ProgressBar>,
+    next_id: usize,
 }
 
 impl DownloadProjectReporter {
     pub(crate) fn new(printer: Printer, length: u64) -> Self {
         let multi_progress = MultiProgress::with_draw_target(printer.target());
-        let root = multi_progress.add(ProgressBar::with_draw_target(Some(length), printer.target()));
+        let root =
+            multi_progress.add(ProgressBar::with_draw_target(Some(length), printer.target()));
         root.enable_steady_tick(Duration::from_millis(200));
         root.set_style(
             ProgressStyle::with_template("{spinner:.white} {msg:.dim} ({pos}/{len})")
@@ -714,18 +732,93 @@ impl DownloadProjectReporter {
         );
         root.set_message("Downloading packages...");
 
-        let reporter = ProgressReporter::new(root, multi_progress, printer);
-        Self { reporter }
+        // Jupyter cannot redraw previous lines, so we fall back to the root spinner only.
+        // See https://github.com/astral-sh/uv/issues/3887.
+        let multi = if env::var(EnvVars::JPY_SESSION_NAME).is_ok() {
+            None
+        } else {
+            Some(DownloadMulti {
+                multi_progress,
+                state: Arc::default(),
+            })
+        };
+
+        Self {
+            printer,
+            multi,
+            root,
+        }
     }
 
     /// Open a byte-level bar for a single artifact download; call on HTTP 200 once
     /// `content_length` is known.
     pub(crate) fn on_download_start(&self, name: String, size: Option<u64>) -> usize {
-        self.reporter.on_download_start(name, size)
+        let Some(multi) = self.multi.as_ref() else {
+            return 0;
+        };
+
+        let mut state = multi.state.lock().unwrap();
+        state.next_id += 1;
+        let id = state.next_id;
+
+        let progress = multi.multi_progress.insert_before(
+            &self.root,
+            ProgressBar::with_draw_target(size, self.printer.target()),
+        );
+
+        if let Some(size) = size {
+            // Two-line template:
+            //   line 1: full filename (truncated by `wide_msg` if wider than the terminal).
+            //   line 2: bar + binary bytes counters.
+            // Keeping filename and bar on separate lines avoids the wrap corruption that
+            // happened when a long wheel filename + 30-char bar exceeded the terminal width.
+            progress.set_style(
+                ProgressStyle::with_template(
+                    "{wide_msg:.cyan}\n  {bar:40.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}",
+                )
+                .unwrap()
+                .progress_chars("━━─"),
+            );
+            if multi.multi_progress.is_hidden()
+                && !*HAS_UV_TEST_NO_CLI_PROGRESS
+                && size > 1024 * 1024
+            {
+                let (bytes, unit) = human_readable_bytes(size);
+                let _ = writeln!(
+                    self.printer.stderr(),
+                    "{} {} {}",
+                    "Downloading".bold().cyan(),
+                    name,
+                    format!("({bytes:.1}{unit})").dimmed()
+                );
+            }
+            progress.set_message(name);
+        } else {
+            // Unknown content-length: fall back to a single-line "streaming" indicator.
+            progress.set_style(ProgressStyle::with_template("{wide_msg:.dim} ....").unwrap());
+            if multi.multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+                let _ = writeln!(
+                    self.printer.stderr(),
+                    "{} {}",
+                    "Downloading".bold().cyan(),
+                    name
+                );
+            }
+            progress.set_message(name);
+            progress.finish();
+        }
+
+        state.bars.insert(id, progress);
+        id
     }
 
     pub(crate) fn on_download_progress(&self, id: usize, bytes: u64) {
-        self.reporter.on_download_progress(id, bytes);
+        let Some(multi) = self.multi.as_ref() else {
+            return;
+        };
+        if let Some(bar) = multi.state.lock().unwrap().bars.get(&id) {
+            bar.inc(bytes);
+        }
     }
 
     /// Close the per-artifact byte-level bar.
@@ -735,19 +828,52 @@ impl DownloadProjectReporter {
     /// counter progression is handled separately by [`Self::on_task_done`] so that
     /// skipped-because-already-exists tasks still count toward `(pos/len)`.
     pub(crate) fn on_download_complete(&self, id: usize) {
-        self.reporter.on_download_complete(id);
+        let Some(multi) = self.multi.as_ref() else {
+            return;
+        };
+        let bar = multi.state.lock().unwrap().bars.remove(&id);
+        if let Some(bar) = bar {
+            bar.finish_and_clear();
+        }
     }
 
     /// Tick the root `(pos/len)` counter — call once per finished task, regardless
     /// of whether it actually hit the network.
     pub(crate) fn on_task_done(&self) {
-        self.reporter.root.inc(1);
+        self.root.inc(1);
     }
 
     /// Clear the root spinner once all downloads have finished.
+    ///
+    /// Also drains any sub-bars that are still registered — this matters when the outer
+    /// download loop aborts in-flight tasks after a failure. Those futures are dropped
+    /// at their `.await` point so `on_download_complete` never runs for them, leaving
+    /// their bars drawn on the terminal until something clears them. Draining here
+    /// guarantees the terminal is clean regardless of success or early abort.
     pub(crate) fn on_complete(&self) {
-        self.reporter.root.set_message("");
-        self.reporter.root.finish_and_clear();
+        if let Some(multi) = self.multi.as_ref() {
+            let orphans: Vec<_> = {
+                let mut state = multi.state.lock().unwrap();
+                state.bars.drain().map(|(_, bar)| bar).collect()
+            };
+            for bar in orphans {
+                bar.finish_and_clear();
+            }
+        }
+        self.root.set_message("");
+        self.root.finish_and_clear();
+    }
+}
+
+impl Drop for DownloadProjectReporter {
+    /// Backstop for error paths that bail before reaching [`Self::on_complete`]. The
+    /// download loop may `return Err(_)` after calling `tasks.abort_all()`, which drops
+    /// in-flight futures without running `on_download_complete` for their bars. Without
+    /// this drop impl, the last `Arc<Self>` going away would leak those bars onto the
+    /// terminal. All operations here are idempotent (they no-op if `on_complete` already
+    /// ran on the success path).
+    fn drop(&mut self) {
+        self.on_complete();
     }
 }
 
