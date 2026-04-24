@@ -1,36 +1,34 @@
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
-use rustc_hash::FxHashSet;
-use tracing::{debug, warn};
-use walkdir::WalkDir;
-use zip::ZipWriter;
-use zip::write::FileOptions;
+use tracing::warn;
+use uuid::Uuid;
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, DependencyGroups, DependencyGroupsWithDefaults, ExtrasSpecification,
-    HashCheckingMode, InstallOptions, PlatformOs, PlatformSpec, PyImpl, TargetTriple,
+    InstallOptions, PlatformOs, PlatformSpec, PyImpl, TargetTriple,
 };
-use uv_dispatch::BuildDispatch;
-use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{CachedDist, Dist, Index, Resolution, ResolvedDist, SourceDist};
+use uv_distribution_types::{
+    BuiltDist, Dist, RemoteSource, ResolvedDist, SourceDist,
+};
+use uv_extract::hash::Hasher;
 use uv_normalize::DefaultExtras;
 use uv_platform_tags::Arch;
 use uv_preview::Preview;
+use uv_pypi_types::HashDigests;
 use uv_python::{Interpreter, PythonDownloads, PythonPreference, PythonRequest};
-use uv_resolver::{FlatIndex, Installable, Lock};
+use uv_redacted::DisplaySafeUrl;
+use uv_resolver::{Installable, Lock};
 use uv_settings::PythonInstallMirrors;
-use uv_types::{BuildIsolation, HashStrategy, InFlight, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::{operations, resolution_markers, resolution_tags};
+use crate::commands::pip::{resolution_markers, resolution_tags};
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
@@ -41,10 +39,13 @@ use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
-/// Download the project's pinned dependencies as wheel files into `output_dir`.
+/// Download the project's pinned dependencies as wheel or sdist files into `output_dir`.
 ///
-/// Resolves (or reads) the lockfile for the requested target platform, downloads all required
-/// wheels into uv's cache, and then materializes them as `.whl` archives in the output directory.
+/// Resolves (or reads) the lockfile for the requested target platform, then directly
+/// downloads every artifact to `output_dir` without extracting, building, or re-archiving.
+/// The output files are byte-identical to what was published on the index; their SHA-256
+/// matches the hashes in `uv.lock`.
+///
 /// No virtual environment is created or modified.
 #[expect(clippy::too_many_arguments)]
 pub(crate) async fn download(
@@ -264,36 +265,11 @@ pub(crate) async fn download(
         &install_options,
     )?;
 
-    // 9. Filter out local path / editable / git sources; they cannot be packaged as wheel archives.
-    let resolution = filter_local_sources(resolution);
-
-    // 10. Build RegistryClient + FlatIndex + BuildDispatch (mirrors do_sync in sync.rs).
+    // 9. Build RegistryClient for direct-URL downloads.
     let index_locations = &settings.resolver.index_locations;
     let index_strategy = settings.resolver.index_strategy;
     let keyring_provider = settings.resolver.keyring_provider;
-    let dependency_metadata = &settings.resolver.dependency_metadata;
-    let config_setting = &settings.resolver.config_setting;
-    let config_settings_package = &settings.resolver.config_settings_package;
-    let exclude_newer = &settings.resolver.exclude_newer;
-    let link_mode = settings.resolver.link_mode;
-    let build_options = &settings.resolver.build_options;
-    let sources = settings.resolver.sources;
-    let extra_build_dependencies = &settings.resolver.extra_build_dependencies;
-    let extra_build_variables = &settings.resolver.extra_build_variables;
-
-    let extra_build_requires = LoweredExtraBuildDependencies::from_workspace(
-        extra_build_dependencies.clone(),
-        project.workspace(),
-        index_locations,
-        &sources,
-        client_builder.credentials_cache(),
-    )?
-    .into_inner();
-
     let client_builder = client_builder.clone().keyring(keyring_provider);
-
-    let build_hasher = HashStrategy::default();
-    let hasher = HashStrategy::from_resolution(&resolution, HashCheckingMode::Verify)?;
 
     let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
         .index_locations(index_locations.clone())
@@ -302,85 +278,88 @@ pub(crate) async fn download(
         .platform(interpreter.platform())
         .build()?;
 
-    let flat_index = {
-        let flat_client =
-            FlatIndexClient::new(client.cached_client(), client.connectivity(), cache);
-        let entries = flat_client
-            .fetch_all(index_locations.flat_indexes().map(Index::url))
-            .await?;
-        FlatIndex::from_entries(entries, Some(&tags), &hasher, build_options)
-    };
+    // 10. Ensure the output directory exists.
+    fs_err::create_dir_all(&output_dir)?;
 
-    let build_constraints = install_target.build_constraints();
+    // 11. Walk the resolution and directly download each artifact.
+    let mut report = DownloadReport::default();
+    let root_name = project.workspace().pyproject_toml().project.as_ref().map(|p| &p.name);
 
-    let build_dispatch = BuildDispatch::new(
-        &client,
-        cache,
-        &build_constraints,
-        interpreter,
-        index_locations,
-        &flat_index,
-        dependency_metadata,
-        state.fork().into_inner(),
-        index_strategy,
-        config_setting,
-        config_settings_package,
-        BuildIsolation::Isolated,
-        &extra_build_requires,
-        extra_build_variables,
-        link_mode,
-        build_options,
-        &build_hasher,
-        exclude_newer.clone(),
-        sources,
-        SourceTreeEditablePolicy::Project,
-        workspace_cache.clone(),
-        concurrency.clone(),
-        preview,
-    );
-
-    // 11. Collect all installable distributions and prepare (download + unzip into cache).
-    let all_dists: Vec<Arc<Dist>> = resolution
-        .distributions()
-        .filter_map(|dist| {
-            if let ResolvedDist::Installable { dist, .. } = dist {
-                Some(dist.clone())
-            } else {
-                None
+    for resolved in resolution.distributions() {
+        let ResolvedDist::Installable { dist, .. } = resolved else {
+            continue;
+        };
+        match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(built)) => {
+                let wheel = built.best_wheel();
+                let url = wheel.file.url.to_url()?;
+                let dst = output_dir.join(wheel.file.filename.as_ref());
+                download_to(&client, url, &dst, &wheel.file.hashes, &mut report).await?;
             }
-        })
-        .collect();
-
-    let in_flight = InFlight::default();
-    let cached = match operations::prepare(
-        all_dists,
-        &in_flight,
-        &resolution,
-        &hasher,
-        &tags,
-        build_options,
-        &client,
-        &build_dispatch,
-        cache,
-        &concurrency,
-        printer,
-    )
-    .await
-    {
-        Ok(cached) => cached,
-        Err(err) => {
-            return diagnostics::OperationDiagnostic::with_system_certs(
-                client_builder.system_certs(),
-            )
-            .report(err)
-            .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+            Dist::Built(BuiltDist::DirectUrl(direct)) => {
+                let dst = output_dir.join(direct.filename.to_string());
+                download_to(
+                    &client,
+                    (*direct.location).clone(),
+                    &dst,
+                    &HashDigests::empty(),
+                    &mut report,
+                )
+                .await?;
+            }
+            Dist::Built(BuiltDist::Path(local)) => {
+                let dst = output_dir.join(local.filename.to_string());
+                copy_or_link(&local.install_path, &dst, &mut report)?;
+            }
+            Dist::Source(SourceDist::Registry(source)) => {
+                let url = source.file.url.to_url()?;
+                let dst = output_dir.join(source.file.filename.as_ref());
+                download_to(&client, url, &dst, &source.file.hashes, &mut report).await?;
+            }
+            Dist::Source(SourceDist::DirectUrl(direct)) => {
+                let filename = direct
+                    .filename()
+                    .ok()
+                    .map(|f: std::borrow::Cow<'_, str>| f.into_owned())
+                    .unwrap_or_else(|| format!("{}.{}", direct.name, direct.ext));
+                let dst = output_dir.join(filename);
+                download_to(
+                    &client,
+                    (*direct.location).clone(),
+                    &dst,
+                    &HashDigests::empty(),
+                    &mut report,
+                )
+                .await?;
+            }
+            Dist::Source(SourceDist::Git(git)) => {
+                warn_user!(
+                    "Skipping git source `{}` (not materialized into --output-dir)",
+                    git.name
+                );
+            }
+            Dist::Source(SourceDist::Path(path)) => {
+                warn_user!(
+                    "Skipping local path source `{}` (not materialized into --output-dir)",
+                    path.name
+                );
+            }
+            Dist::Source(SourceDist::Directory(dir)) => {
+                // Suppress the warning for the root project and virtual workspace members;
+                // they are expected to be skipped.
+                let is_root = root_name.is_some_and(|n| n == &dir.name);
+                let is_virtual = dir.r#virtual.unwrap_or(false);
+                if !is_root && !is_virtual {
+                    warn_user!(
+                        "Skipping local/editable source `{}` (not materialized into --output-dir)",
+                        dir.name
+                    );
+                }
+            }
         }
-    };
+    }
 
-    // 12. Materialize cached (unzipped) wheels as .whl archives in the output directory.
-    let report = materialize_to_out(&cached, &output_dir)?;
-
-    // 13. Print a summary.
+    // 12. Print a summary.
     writeln!(
         printer.stderr(),
         "Downloaded {} package{} ({} skipped) to {}",
@@ -397,7 +376,7 @@ pub(crate) async fn download(
 ///
 /// Always targets the full workspace for [`VirtualProject::Project`] (equivalent
 /// to `uv sync --all-packages`) because a wheelhouse is typically populated
-/// across all members. Spec §4.3. If single-root or package-selected
+/// across all members. If single-root or package-selected
 /// materialization is needed later, this is the place to thread a filter.
 fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> InstallTarget<'a> {
     match project {
@@ -411,152 +390,111 @@ fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> Insta
     }
 }
 
-/// Filter out distributions sourced from local directories (editable/path) or git, which cannot
-/// be materialized as standalone wheel archives.
-fn filter_local_sources(resolution: Resolution) -> Resolution {
-    resolution.filter(|dist| {
-        let ResolvedDist::Installable { dist, .. } = dist else {
-            return true;
-        };
-        match dist.as_ref() {
-            Dist::Source(SourceDist::Directory(d)) => {
-                warn_user!(
-                    "Skipping local/editable source `{}` (not materialized into --output-dir)",
-                    d.name
-                );
-                false
-            }
-            Dist::Source(SourceDist::Git(g)) => {
-                warn_user!(
-                    "Skipping git source `{}` (not materialized into --output-dir)",
-                    g.name
-                );
-                false
-            }
-            Dist::Source(SourceDist::Path(p)) => {
-                warn_user!(
-                    "Skipping local path source `{}` (not materialized into --output-dir)",
-                    p.name
-                );
-                false
-            }
-            _ => true,
-        }
-    })
-}
-
-/// Summary of a [`materialize_to_out`] run.
+/// Summary of a download run.
 #[derive(Default)]
 struct DownloadReport {
     written: usize,
     skipped: usize,
 }
 
-/// Materialize the given [`CachedDist`] entries into `out_dir` as `.whl` files.
+/// Stream a remote URL directly to `dst`, verifying hashes when present.
 ///
-/// uv's cache holds wheels in extracted form, so this function re-archives each
-/// cache directory into a `.whl` using DEFLATE compression.
-///
-/// # Known limitation
-///
-/// The re-zipped output is functionally equivalent to the upstream wheel, but
-/// its SHA-256 will NOT match the hash stored in `uv.lock` or published on
-/// PyPI. Downstream tools that re-verify wheels against those hashes
-/// (`pip install --require-hashes`, `pip-audit`, etc.) will reject the output.
-///
-/// TODO: Teach `operations::prepare` (or `DistributionDatabase`) to retain the
-/// original wheel bytes alongside the extracted archive, then hard-link from
-/// there into `out_dir` instead of re-archiving.
-fn materialize_to_out(cached: &[CachedDist], out_dir: &Path) -> Result<DownloadReport> {
-    fs_err::create_dir_all(out_dir)?;
-
-    let mut report = DownloadReport::default();
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-
-    for dist in cached {
-        // Use the authoritative filename stored in the CachedDist metadata.
-        let whl_name = match dist {
-            CachedDist::Registry(r) => r.filename.to_string(),
-            CachedDist::Url(u) => u.filename.to_string(),
-        };
-
-        if !seen.insert(whl_name.clone()) {
-            debug!("Skipping duplicate wheel {whl_name}");
-            continue;
-        }
-
-        let dst = out_dir.join(&whl_name);
-        if dst.exists() {
-            report.skipped += 1;
-            continue;
-        }
-
-        let src = dist.path();
-
-        if src.is_dir() {
-            // Re-zip the unzipped wheel directory into a .whl (ZIP) archive.
-            let file = fs_err::File::create(&dst)
-                .map_err(|e| anyhow::anyhow!("failed to create `{}`: {e}", dst.display()))?;
-            let mut zip = ZipWriter::new(file);
-            let options: FileOptions<'_, ()> = FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-
-            for entry in WalkDir::new(src).sort_by_file_name() {
-                let entry = entry.map_err(|e| {
-                    anyhow::anyhow!("error reading wheel directory `{}`: {e}", src.display())
-                })?;
-                let path = entry.path();
-                let relative = path.strip_prefix(src).map_err(|_| {
-                    anyhow::anyhow!(
-                        "WalkDir yielded path `{}` not under root `{}`",
-                        path.display(),
-                        src.display()
-                    )
-                })?;
-
-                let name = relative.to_str().ok_or_else(|| {
-                    anyhow::anyhow!("non-UTF-8 path inside wheel: {}", path.display())
-                })?;
-
-                if entry.file_type().is_dir() {
-                    if !name.is_empty() {
-                        zip.add_directory(name, options).map_err(|e| {
-                            anyhow::anyhow!("failed to add dir `{name}` to zip: {e}")
-                        })?;
-                    }
-                } else {
-                    zip.start_file(name, options).map_err(|e| {
-                        anyhow::anyhow!("failed to add file `{name}` to zip: {e}")
-                    })?;
-                    let mut f = fs_err::File::open(path)?;
-                    std::io::copy(&mut f, &mut zip)?;
-                }
-            }
-
-            zip.finish().map_err(|e| {
-                anyhow::anyhow!("failed to finalize zip `{}`: {e}", dst.display())
-            })?;
-        } else {
-            // The source is already a plain file; prefer hard-link, fall back to fs_err copy.
-            if let Err(link_err) = fs_err::hard_link(src, &dst) {
-                warn!(
-                    "hard_link {} -> {} failed ({link_err}); copying",
-                    src.display(),
-                    dst.display()
-                );
-                fs_err::copy(src, &dst).map_err(|copy_err| {
-                    anyhow::anyhow!(
-                        "failed to materialize `{}` into `{}`: \
-                         hard_link error: {link_err}; copy error: {copy_err}",
-                        src.display(),
-                        dst.display(),
-                    )
-                })?;
-            }
-        }
-
-        report.written += 1;
+/// Uses an atomic write: bytes land in a `.partial-<nonce>` sibling, then are renamed
+/// on success.  On any failure the partial file is removed and the error is propagated.
+async fn download_to(
+    client: &uv_client::RegistryClient,
+    url: DisplaySafeUrl,
+    dst: &Path,
+    expected_hashes: &HashDigests,
+    report: &mut DownloadReport,
+) -> Result<()> {
+    if dst.exists() {
+        report.skipped += 1;
+        return Ok(());
     }
 
-    Ok(report)
+    let partial = dst.with_extension(format!(
+        "partial-{}",
+        Uuid::new_v4().as_simple()
+    ));
+
+    let response = client
+        .uncached_client(&url)
+        .get(url.as_str())
+        .send()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to fetch `{url}`: {err}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        bail!("failed to fetch `{url}`: HTTP {status}");
+    }
+
+    // Build hashers for every algorithm referenced in expected_hashes.
+    let mut hashers: Vec<Hasher> = expected_hashes
+        .iter()
+        .map(|h| Hasher::from(h.algorithm))
+        .collect();
+
+    let body = response
+        .bytes()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to read body of `{url}`: {err}"))?;
+
+    for hasher in &mut hashers {
+        hasher.update(&body);
+    }
+
+    // Verify hashes before writing to disk.
+    for (expected, hasher) in expected_hashes.iter().zip(hashers) {
+        let actual: uv_pypi_types::HashDigest = hasher.into();
+        if actual.digest != expected.digest {
+            bail!(
+                "hash mismatch for `{url}`:\n  expected {}: {}\n  actual   {}: {}",
+                expected.algorithm,
+                expected.digest,
+                actual.algorithm,
+                actual.digest,
+            );
+        }
+    }
+
+    // Write to a partial file first for atomicity.
+    fs_err::write(&partial, &body)
+        .map_err(|err| anyhow::anyhow!("failed to write `{}`: {err}", partial.display()))?;
+
+    if let Err(err) = fs_err::rename(&partial, dst) {
+        let _ = fs_err::remove_file(&partial);
+        return Err(anyhow::anyhow!(
+            "failed to finalize `{}`: {err}",
+            dst.display()
+        ));
+    }
+
+    report.written += 1;
+    Ok(())
+}
+
+/// Hard-link or copy a local path artifact into the output directory.
+fn copy_or_link(src: &Path, dst: &Path, report: &mut DownloadReport) -> Result<()> {
+    if dst.exists() {
+        report.skipped += 1;
+        return Ok(());
+    }
+    if let Err(_link_err) = fs_err::hard_link(src, dst) {
+        warn!(
+            "hard_link {} -> {} failed; copying instead",
+            src.display(),
+            dst.display()
+        );
+        fs_err::copy(src, dst).map_err(|copy_err| {
+            anyhow::anyhow!(
+                "failed to copy `{}` to `{}`: {copy_err}",
+                src.display(),
+                dst.display(),
+            )
+        })?;
+    }
+    report.written += 1;
+    Ok(())
 }

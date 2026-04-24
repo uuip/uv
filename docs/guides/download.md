@@ -78,11 +78,10 @@ Dependencies that cannot be materialized into a portable wheel are skipped with 
 - `editable = true` dependencies.
 - `git` sources.
 
-The remaining resolved distributions are downloaded as `.whl` or `.tar.gz` files. uv's cache holds
-wheels in extracted form, so `uv download` re-archives them into `.whl` files. The resulting
-archives are functionally equivalent to the upstream wheels but their SHA-256 will differ from the
-hash in `uv.lock` — downstream tooling that re-verifies against the original hash (e.g.
-`pip install --require-hashes`) will reject the output.
+The remaining resolved distributions are downloaded as `.whl` or `.tar.gz` files directly from the
+index, without any extraction or re-archiving. The output files are byte-identical to what was
+published on the index; their SHA-256 matches the hashes in `uv.lock`, so downstream tools like
+`pip install --require-hashes` will accept them.
 
 ## See also
 
