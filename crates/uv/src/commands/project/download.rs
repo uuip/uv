@@ -1,20 +1,23 @@
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
+use futures::StreamExt;
 use owo_colors::OwoColorize;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tracing::warn;
 use uuid::Uuid;
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, DependencyGroups, DependencyGroupsWithDefaults, ExtrasSpecification,
     InstallOptions, PlatformOs, PlatformSpec, PyImpl, TargetTriple,
 };
-use uv_distribution_types::{
-    BuiltDist, Dist, RemoteSource, ResolvedDist, SourceDist,
-};
+use uv_distribution_types::{BuiltDist, Dist, RemoteSource, ResolvedDist, SourceDist};
 use uv_extract::hash::Hasher;
 use uv_normalize::DefaultExtras;
 use uv_platform_tags::Arch;
@@ -277,13 +280,19 @@ pub(crate) async fn download(
         .markers(interpreter.markers())
         .platform(interpreter.platform())
         .build()?;
+    let client = Arc::new(client);
 
     // 10. Ensure the output directory exists.
     fs_err::create_dir_all(&output_dir)?;
 
-    // 11. Walk the resolution and directly download each artifact.
+    // 11. Walk the resolution and spawn per-artifact download tasks onto a JoinSet.
+    //     Downloads run in parallel, gated by `concurrency.downloads_semaphore` to mirror
+    //     the rate-limiting behaviour of `uv sync`'s preparer. Local copy/link and skip
+    //     arms run inline because they don't issue network requests.
     let mut report = DownloadReport::default();
     let root_name = project.workspace().pyproject_toml().project.as_ref().map(|p| &p.name);
+    let semaphore = concurrency.downloads_semaphore.clone();
+    let mut tasks: JoinSet<Result<MaterializeOutcome>> = JoinSet::new();
 
     for (resolved, hashes) in resolution.hashes() {
         let ResolvedDist::Installable { dist, .. } = resolved else {
@@ -293,42 +302,38 @@ pub(crate) async fn download(
             Dist::Built(BuiltDist::Registry(built)) => {
                 let wheel = built.best_wheel();
                 let url = wheel.file.url.to_url()?;
-                let filename = sanitize_artifact_filename(wheel.file.filename.as_ref())?;
-                let dst = output_dir.join(filename);
+                let filename = sanitize_artifact_filename(wheel.file.filename.as_ref())?.to_owned();
+                let dst = output_dir.join(&filename);
                 // Prefer the per-file hashes published on the index; fall back to the
                 // lock-level hashes (both are authoritative for registry wheels).
-                let expected = if wheel.file.hashes.is_empty() {
-                    hashes
+                let expected: Vec<HashDigest> = if wheel.file.hashes.is_empty() {
+                    hashes.to_vec()
                 } else {
-                    wheel.file.hashes.as_slice()
+                    wheel.file.hashes.to_vec()
                 };
-                download_to(&client, url, &dst, expected, &mut report).await?;
+                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
             }
             Dist::Built(BuiltDist::DirectUrl(direct)) => {
-                let dst = output_dir.join(direct.filename.to_string());
-                download_to(
-                    &client,
-                    (*direct.location).clone(),
-                    &dst,
-                    hashes,
-                    &mut report,
-                )
-                .await?;
+                let filename = sanitize_artifact_filename(&direct.filename.to_string())?.to_owned();
+                let dst = output_dir.join(&filename);
+                let url = (*direct.location).clone();
+                let expected: Vec<HashDigest> = hashes.to_vec();
+                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
             }
             Dist::Built(BuiltDist::Path(local)) => {
                 let dst = output_dir.join(local.filename.to_string());
-                copy_or_link(&local.install_path, &dst, &mut report)?;
+                report.record(copy_or_link(&local.install_path, &dst)?);
             }
             Dist::Source(SourceDist::Registry(source)) => {
                 let url = source.file.url.to_url()?;
-                let filename = sanitize_artifact_filename(source.file.filename.as_ref())?;
-                let dst = output_dir.join(filename);
-                let expected = if source.file.hashes.is_empty() {
-                    hashes
+                let filename = sanitize_artifact_filename(source.file.filename.as_ref())?.to_owned();
+                let dst = output_dir.join(&filename);
+                let expected: Vec<HashDigest> = if source.file.hashes.is_empty() {
+                    hashes.to_vec()
                 } else {
-                    source.file.hashes.as_slice()
+                    source.file.hashes.to_vec()
                 };
-                download_to(&client, url, &dst, expected, &mut report).await?;
+                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
             }
             Dist::Source(SourceDist::DirectUrl(direct)) => {
                 let raw = direct
@@ -336,16 +341,11 @@ pub(crate) async fn download(
                     .ok()
                     .map(|f: std::borrow::Cow<'_, str>| f.into_owned())
                     .unwrap_or_else(|| format!("{}.{}", direct.name, direct.ext));
-                let filename = sanitize_artifact_filename(&raw)?;
-                let dst = output_dir.join(filename);
-                download_to(
-                    &client,
-                    (*direct.location).clone(),
-                    &dst,
-                    hashes,
-                    &mut report,
-                )
-                .await?;
+                let filename = sanitize_artifact_filename(&raw)?.to_owned();
+                let dst = output_dir.join(&filename);
+                let url = (*direct.location).clone();
+                let expected: Vec<HashDigest> = hashes.to_vec();
+                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
             }
             Dist::Source(SourceDist::Git(git)) => {
                 warn_user!(
@@ -370,6 +370,22 @@ pub(crate) async fn download(
                         dir.name
                     );
                 }
+            }
+        }
+    }
+
+    // Drain spawned downloads. Abort remaining tasks on the first failure so we don't
+    // leak half-written partials from unrelated downloads.
+    while let Some(join_res) = tasks.join_next().await {
+        match join_res {
+            Ok(Ok(outcome)) => report.record(outcome),
+            Ok(Err(err)) => {
+                tasks.abort_all();
+                return Err(err);
+            }
+            Err(join_err) => {
+                tasks.abort_all();
+                bail!("download task panicked: {join_err}");
             }
         }
     }
@@ -405,6 +421,13 @@ fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> Insta
     }
 }
 
+/// Outcome of materializing a single artifact.
+#[derive(Clone, Copy)]
+enum MaterializeOutcome {
+    Written,
+    Skipped,
+}
+
 /// Summary of a download run.
 #[derive(Default)]
 struct DownloadReport {
@@ -412,26 +435,51 @@ struct DownloadReport {
     skipped: usize,
 }
 
+impl DownloadReport {
+    fn record(&mut self, outcome: MaterializeOutcome) {
+        match outcome {
+            MaterializeOutcome::Written => self.written += 1,
+            MaterializeOutcome::Skipped => self.skipped += 1,
+        }
+    }
+}
+
+/// Spawn a streaming download task onto `tasks`, gated by `semaphore`.
+fn spawn_download(
+    tasks: &mut JoinSet<Result<MaterializeOutcome>>,
+    client: &Arc<RegistryClient>,
+    semaphore: &Arc<Semaphore>,
+    url: DisplaySafeUrl,
+    dst: PathBuf,
+    expected: Vec<HashDigest>,
+) {
+    let client = Arc::clone(client);
+    let semaphore = Arc::clone(semaphore);
+    tasks.spawn(async move {
+        // The semaphore is never closed, so `acquire_owned` only fails if all permits
+        // are permanently dropped, which we don't do.
+        let _permit = semaphore.acquire_owned().await.ok();
+        download_to(&client, url, &dst, &expected).await
+    });
+}
+
 /// Stream a remote URL directly to `dst`, verifying hashes when present.
 ///
-/// Uses an atomic write: bytes land in a `.partial-<nonce>` sibling, then are renamed
-/// on success.  On any failure the partial file is removed and the error is propagated.
+/// The response body is chunked to disk via `bytes_stream()` so we never hold the
+/// full artifact in memory; hashes are updated incrementally as each chunk arrives.
+/// Bytes land in a `.partial-<nonce>` sibling first and are renamed on success. On
+/// any failure the partial file is removed and the error is propagated.
 async fn download_to(
-    client: &uv_client::RegistryClient,
+    client: &RegistryClient,
     url: DisplaySafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
-    report: &mut DownloadReport,
-) -> Result<()> {
+) -> Result<MaterializeOutcome> {
     if dst.exists() {
-        report.skipped += 1;
-        return Ok(());
+        return Ok(MaterializeOutcome::Skipped);
     }
 
-    let partial = dst.with_extension(format!(
-        "partial-{}",
-        Uuid::new_v4().as_simple()
-    ));
+    let partial = dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple()));
 
     let response = client
         .uncached_client(&url)
@@ -445,25 +493,53 @@ async fn download_to(
         bail!("failed to fetch `{url}`: HTTP {status}");
     }
 
-    // Build hashers for every algorithm referenced in expected_hashes.
     let mut hashers: Vec<Hasher> = expected_hashes
         .iter()
         .map(|h| Hasher::from(h.algorithm))
         .collect();
 
-    let body = response
-        .bytes()
+    let mut file = fs_err::tokio::File::create(&partial)
         .await
-        .map_err(|err| anyhow::anyhow!("failed to read body of `{url}`: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("failed to create `{}`: {err}", partial.display()))?;
 
-    for hasher in &mut hashers {
-        hasher.update(&body);
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                drop(file);
+                let _ = fs_err::tokio::remove_file(&partial).await;
+                return Err(anyhow::anyhow!("failed to read body of `{url}`: {err}"));
+            }
+        };
+        for hasher in &mut hashers {
+            hasher.update(&chunk);
+        }
+        if let Err(err) = file.write_all(&chunk).await {
+            drop(file);
+            let _ = fs_err::tokio::remove_file(&partial).await;
+            return Err(anyhow::anyhow!(
+                "failed to write `{}`: {err}",
+                partial.display()
+            ));
+        }
     }
 
-    // Verify hashes before writing to disk.
+    if let Err(err) = file.flush().await {
+        drop(file);
+        let _ = fs_err::tokio::remove_file(&partial).await;
+        return Err(anyhow::anyhow!(
+            "failed to flush `{}`: {err}",
+            partial.display()
+        ));
+    }
+    drop(file);
+
+    // Verify hashes before renaming.
     for (expected, hasher) in expected_hashes.iter().zip(hashers) {
         let actual: uv_pypi_types::HashDigest = hasher.into();
         if actual.digest != expected.digest {
+            let _ = fs_err::tokio::remove_file(&partial).await;
             bail!(
                 "hash mismatch for `{url}`:\n  expected {}: {}\n  actual   {}: {}",
                 expected.algorithm,
@@ -474,19 +550,6 @@ async fn download_to(
         }
     }
 
-    // TODO: stream the response body (`response.bytes_stream()`) to disk and hash it
-    // incrementally. The current `response.bytes().await` pulls the full artifact into
-    // memory, which is fine for typical wheels but wasteful for large ML distributions.
-
-    // Write to a partial file first for atomicity.
-    if let Err(err) = fs_err::write(&partial, &body) {
-        let _ = fs_err::remove_file(&partial);
-        return Err(anyhow::anyhow!(
-            "failed to write `{}`: {err}",
-            partial.display()
-        ));
-    }
-
     if let Err(err) = fs_err::rename(&partial, dst) {
         let _ = fs_err::remove_file(&partial);
         return Err(anyhow::anyhow!(
@@ -495,8 +558,7 @@ async fn download_to(
         ));
     }
 
-    report.written += 1;
-    Ok(())
+    Ok(MaterializeOutcome::Written)
 }
 
 /// Accept an artifact filename only if it is a single harmless path segment.
@@ -517,10 +579,9 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
 }
 
 /// Hard-link or copy a local path artifact into the output directory.
-fn copy_or_link(src: &Path, dst: &Path, report: &mut DownloadReport) -> Result<()> {
+fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
     if dst.exists() {
-        report.skipped += 1;
-        return Ok(());
+        return Ok(MaterializeOutcome::Skipped);
     }
     if let Err(_link_err) = fs_err::hard_link(src, dst) {
         warn!(
@@ -536,8 +597,7 @@ fn copy_or_link(src: &Path, dst: &Path, report: &mut DownloadReport) -> Result<(
             )
         })?;
     }
-    report.written += 1;
-    Ok(())
+    Ok(MaterializeOutcome::Written)
 }
 
 #[cfg(test)]
