@@ -38,7 +38,6 @@ use uv_configuration::{
     PlatformOs, ProjectBuildBackend, ProxyUrl, PyImpl, Reinstall, RequiredVersion, TargetTriple,
     TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
-use uv_platform_tags::Arch;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, IndexUrl,
     PackageConfigSettings, Requirement,
@@ -46,6 +45,7 @@ use uv_distribution_types::{
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep508::{MarkerTree, RequirementOrigin};
+use uv_platform_tags::Arch;
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python::{Prefix, PythonDownloads, PythonPreference, PythonVersion, Target};
@@ -1773,8 +1773,8 @@ impl SyncSettings {
 #[derive(Debug, Clone)]
 #[expect(dead_code, reason = "wired in Task 6")]
 pub(crate) struct DownloadSettings {
-    pub(crate) locked: bool,
-    pub(crate) frozen: bool,
+    pub(crate) lock_check: LockCheck,
+    pub(crate) frozen: Option<FrozenSource>,
     pub(crate) extras: ExtrasSpecification,
     pub(crate) groups: DependencyGroups,
     pub(crate) output_dir: PathBuf,
@@ -1835,9 +1835,16 @@ impl DownloadSettings {
         let dev = dev || environment.dev.value == Some(true);
         let no_dev = no_dev || environment.no_dev.value == Some(true);
 
+        // Resolve flags from CLI and environment variables.
+        let locked = resolve_flag(locked, "locked", environment.locked);
+        let frozen = resolve_flag(frozen, "frozen", environment.frozen);
+
+        // Check for conflicts between locked and frozen.
+        check_conflicts(locked, frozen);
+
         Self {
-            locked,
-            frozen,
+            lock_check: resolve_lock_check(locked),
+            frozen: resolve_frozen(frozen),
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
                 no_extra,
@@ -1890,6 +1897,8 @@ fn host_platform_machine() -> Arch {
     } else if cfg!(target_arch = "riscv64") {
         Arch::Riscv64
     } else {
+        // Unknown host architecture; default to x86_64. The user can
+        // override with --machine.
         Arch::X86_64
     }
 }
