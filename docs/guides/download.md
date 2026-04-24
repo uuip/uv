@@ -10,7 +10,7 @@ image in multiple layers, or hand off a frozen artifact set to another environme
 ```console
 $ uv download -o pkgs
 Resolved 25 packages in 142ms
-Downloaded 25 packages (0 skipped) to pkgs
+Downloaded 25 packages (0 already existed) to pkgs
 ```
 
 The command reads `pyproject.toml` and `uv.lock` from the current project. Passing `-o/--output-dir`
@@ -28,9 +28,9 @@ $ uv download \
     -o aarch64-wheels
 ```
 
-The target must appear in `tool.uv.environments` (or `tool.uv.required-environments`) for the
-lockfile to carry the right wheels. Otherwise, `uv download` exits with an error pointing at the
-relevant environment configuration.
+The target must evaluate against one of the lockfile's `tool.uv.environments` markers, matching the
+check performed by `uv sync`. Otherwise, `uv download` exits with an error pointing at the relevant
+environment configuration.
 
 ## Flags
 
@@ -63,9 +63,9 @@ that already exist:
 
 ```console
 $ uv download -o pkgs
-Downloaded 25 packages (0 skipped) to pkgs
+Downloaded 25 packages (0 already existed) to pkgs
 $ uv download -o pkgs
-Downloaded 0 packages (25 skipped) to pkgs
+Downloaded 0 packages (25 already existed) to pkgs
 ```
 
 ## Skipped dependencies

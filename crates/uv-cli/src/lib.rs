@@ -1155,8 +1155,9 @@ pub enum ProjectCommand {
     /// Resolves `uv.lock` for the requested target platform and writes every wheel
     /// (and any sdists referenced by the lockfile) into `--output-dir`.
     ///
-    /// Does not create or modify a virtual environment. Local path, editable, and
-    /// workspace-member dependencies are skipped with a warning.
+    /// Does not create or modify a virtual environment. The current project and
+    /// virtual workspace roots are silently omitted; other workspace members,
+    /// local path, editable, and git dependencies are skipped with a warning.
     #[command(
         after_help = "Use `uv help download` for more details.",
         after_long_help = ""
@@ -4202,9 +4203,11 @@ pub struct DownloadArgs {
     #[arg(long, value_parser = parse_platform_machine)]
     pub machine: Option<Arch>,
 
-    /// The minimum glibc version, as `MAJOR.MINOR` (e.g. `2.28`).
+    /// The target manylinux glibc baseline, as `MAJOR.MINOR` (e.g. `2.28`).
     ///
-    /// Only valid with `--platform=linux`. Defaults to `2.28`.
+    /// This is the manylinux compatibility level the downloaded wheels must match
+    /// (e.g. `2.28` selects `manylinux_2_28` wheels); it is *not* a probe of the
+    /// host's glibc. Only valid with `--platform=linux`; defaults to `2.28`.
     #[arg(long, value_parser = parse_platform_glibc)]
     pub glibc: Option<(u16, u16)>,
 
