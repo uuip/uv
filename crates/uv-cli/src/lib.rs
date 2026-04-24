@@ -4233,6 +4233,7 @@ pub struct DownloadArgs {
     #[arg(
         long,
         conflicts_with = "all_extras",
+        conflicts_with = "only_group",
         value_delimiter = ',',
         value_parser = extra_name_with_clap_error,
         value_hint = ValueHint::Other,
@@ -4240,7 +4241,7 @@ pub struct DownloadArgs {
     pub extra: Option<Vec<ExtraName>>,
 
     /// Include all optional dependencies.
-    #[arg(long, conflicts_with = "extra")]
+    #[arg(long, conflicts_with = "extra", conflicts_with = "only_group")]
     pub all_extras: bool,
 
     /// Exclude the specified optional dependencies, if `--all-extras` is supplied.
