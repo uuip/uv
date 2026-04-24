@@ -88,6 +88,39 @@ verified on the way in. That means the output matches what was published on the 
 tools such as `pip install --require-hashes` will accept it. Local `path` wheels are copied or
 hard-linked from disk; their bytes are whatever you point the dependency at.
 
+## Rewriting PyPI artifact URLs to a mirror
+
+When `--default-index` points at a non-PyPI mirror, `uv download` rewrites
+`https://files.pythonhosted.org/packages/...` URLs recorded in the lockfile to
+`{mirror}/packages/...` **in memory only**. `uv.lock` on disk is never modified, and the SHA-256
+hash recorded for each file is still verified against the downloaded bytes — a misconfigured mirror
+surfaces as a hash mismatch rather than a silent substitution.
+
+```console
+$ uv lock                                                    # resolves against PyPI as usual
+$ uv download -o pkgs \
+    --default-index https://pypi.tuna.tsinghua.edu.cn/simple/
+Downloaded 25 packages (0 already existed) to pkgs
+```
+
+The rewrite is deliberately narrow:
+
+- It applies only to URLs whose host is `files.pythonhosted.org`. URLs from corporate or custom
+  indexes with their own file layout are left untouched — rewriting them to `{mirror}/packages/...`
+  would silently 404.
+- It is skipped when `--default-index` itself points at PyPI.
+- If `--default-index` points at a local path, or at a URL whose final segment is not `simple` /
+  `+simple`, `uv download` emits a warning and falls back to the URLs recorded in `uv.lock`.
+
+The rewrite is a **download-time** transformation. It never changes the lockfile, and it never
+participates in lock resolution. With `--locked` or `--frozen`, the lock check runs against the
+original URLs as recorded; only the subsequent HTTP requests go to the mirror. This means:
+
+- `uv download --locked --default-index <mirror>` still passes the strict lock consistency check,
+  because the check is performed against the URLs in `uv.lock`, not the rewritten ones.
+- `uv download --frozen --default-index <mirror>` is the typical mirror use case — lock is trusted,
+  and every fetch goes to the mirror.
+
 ## See also
 
 - [`uv sync`](../concepts/projects/sync.md) — creates or updates a `.venv`.

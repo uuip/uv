@@ -772,9 +772,11 @@ impl DownloadProjectReporter {
             //   line 2: bar + binary bytes counters.
             // Keeping filename and bar on separate lines avoids the wrap corruption that
             // happened when a long wheel filename + 30-char bar exceeded the terminal width.
+            // `{wide_bar}` fills the remaining terminal width instead of a fixed 40 chars,
+            // so narrow terminals (<60 col) don't re-wrap the bar onto a third line.
             progress.set_style(
                 ProgressStyle::with_template(
-                    "{wide_msg:.cyan}\n  {bar:40.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}",
+                    "{wide_msg:.cyan}\n  {wide_bar:.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}",
                 )
                 .unwrap()
                 .progress_chars("━━─"),
@@ -794,8 +796,15 @@ impl DownloadProjectReporter {
             }
             progress.set_message(name);
         } else {
-            // Unknown content-length: fall back to a single-line "streaming" indicator.
-            progress.set_style(ProgressStyle::with_template("{wide_msg:.dim} ....").unwrap());
+            // Unknown content-length: use an animated spinner so the user can tell the
+            // download is still in flight. Previously we called `progress.finish()` here,
+            // which left a static "... ...." line that looked frozen.
+            progress.set_style(
+                ProgressStyle::with_template("  {spinner:.green} {wide_msg:.dim}")
+                    .unwrap()
+                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+            );
+            progress.enable_steady_tick(Duration::from_millis(100));
             if multi.multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
                 let _ = writeln!(
                     self.printer.stderr(),
@@ -805,7 +814,6 @@ impl DownloadProjectReporter {
                 );
             }
             progress.set_message(name);
-            progress.finish();
         }
 
         state.bars.insert(id, progress);
