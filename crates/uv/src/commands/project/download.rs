@@ -410,8 +410,7 @@ pub(crate) async fn download(
 ///
 /// Always targets the full workspace for [`VirtualProject::Project`] (equivalent
 /// to `uv sync --all-packages`) because a wheelhouse is typically populated
-/// across all members. If single-root or package-selected
-/// materialization is needed later, this is the place to thread a filter.
+/// across all members.
 fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> InstallTarget<'a> {
     match project {
         VirtualProject::Project(p) => InstallTarget::Workspace {

@@ -115,12 +115,14 @@ pub enum PlatformSpecError {
     UnsupportedImplementation,
     #[error("{os} + {arch} is not a supported target platform")]
     UnsupportedCombination { os: PlatformOs, arch: Arch },
-    #[error("glibc {major}.{minor} is not supported for {arch} (supported glibc versions: 2.{supported:?})")]
+    #[error(
+        "glibc {major}.{minor} is not supported for {arch} \
+         (supported manylinux tags: 2.17, 2.28, 2.31–2.40)"
+    )]
     UnsupportedGlibc {
         arch: Arch,
         major: u16,
         minor: u16,
-        supported: &'static [u16],
     },
 }
 
@@ -158,60 +160,18 @@ impl PlatformSpec {
         use Arch::{Aarch64, Riscv64, X86, X86_64};
         use PlatformOs::{Linux, Macos, Windows};
         match (self.os, self.arch, self.glibc) {
-            (Linux, X86_64, Some((2, minor))) => match minor {
-                17 => Ok(TargetTriple::X8664Manylinux217),
-                28 => Ok(TargetTriple::X8664Manylinux228),
-                31 => Ok(TargetTriple::X8664Manylinux231),
-                32 => Ok(TargetTriple::X8664Manylinux232),
-                33 => Ok(TargetTriple::X8664Manylinux233),
-                34 => Ok(TargetTriple::X8664Manylinux234),
-                35 => Ok(TargetTriple::X8664Manylinux235),
-                36 => Ok(TargetTriple::X8664Manylinux236),
-                37 => Ok(TargetTriple::X8664Manylinux237),
-                38 => Ok(TargetTriple::X8664Manylinux238),
-                39 => Ok(TargetTriple::X8664Manylinux239),
-                40 => Ok(TargetTriple::X8664Manylinux240),
-                _ => Err(PlatformSpecError::UnsupportedGlibc {
-                    arch: X86_64,
+            (Linux, arch @ (X86_64 | Aarch64), Some((2, minor))) => {
+                linux_manylinux(arch, minor).ok_or(PlatformSpecError::UnsupportedGlibc {
+                    arch,
                     major: 2,
                     minor,
-                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
-                }),
-            },
-            (Linux, Aarch64, Some((2, minor))) => match minor {
-                17 => Ok(TargetTriple::Aarch64Manylinux217),
-                28 => Ok(TargetTriple::Aarch64Manylinux228),
-                31 => Ok(TargetTriple::Aarch64Manylinux231),
-                32 => Ok(TargetTriple::Aarch64Manylinux232),
-                33 => Ok(TargetTriple::Aarch64Manylinux233),
-                34 => Ok(TargetTriple::Aarch64Manylinux234),
-                35 => Ok(TargetTriple::Aarch64Manylinux235),
-                36 => Ok(TargetTriple::Aarch64Manylinux236),
-                37 => Ok(TargetTriple::Aarch64Manylinux237),
-                38 => Ok(TargetTriple::Aarch64Manylinux238),
-                39 => Ok(TargetTriple::Aarch64Manylinux239),
-                40 => Ok(TargetTriple::Aarch64Manylinux240),
-                _ => Err(PlatformSpecError::UnsupportedGlibc {
-                    arch: Aarch64,
-                    major: 2,
-                    minor,
-                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
-                }),
-            },
-            (Linux, X86_64, Some((major, minor))) if major != 2 => {
-                Err(PlatformSpecError::UnsupportedGlibc {
-                    arch: X86_64,
-                    major,
-                    minor,
-                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 })
             }
-            (Linux, Aarch64, Some((major, minor))) if major != 2 => {
+            (Linux, arch @ (X86_64 | Aarch64), Some((major, minor))) => {
                 Err(PlatformSpecError::UnsupportedGlibc {
-                    arch: Aarch64,
+                    arch,
                     major,
                     minor,
-                    supported: &[17, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
                 })
             }
             (Linux, Riscv64, _) => Ok(TargetTriple::Riscv64UnknownLinuxGnu),
@@ -222,6 +182,37 @@ impl PlatformSpec {
             (Macos, Aarch64, None) => Ok(TargetTriple::Aarch64AppleDarwin),
             (os, arch, _) => Err(PlatformSpecError::UnsupportedCombination { os, arch }),
         }
+    }
+}
+
+/// Map `(arch, minor)` to the corresponding manylinux 2.MINOR [`TargetTriple`] variant.
+fn linux_manylinux(arch: Arch, minor: u16) -> Option<TargetTriple> {
+    match (arch, minor) {
+        (Arch::X86_64, 17) => Some(TargetTriple::X8664Manylinux217),
+        (Arch::X86_64, 28) => Some(TargetTriple::X8664Manylinux228),
+        (Arch::X86_64, 31) => Some(TargetTriple::X8664Manylinux231),
+        (Arch::X86_64, 32) => Some(TargetTriple::X8664Manylinux232),
+        (Arch::X86_64, 33) => Some(TargetTriple::X8664Manylinux233),
+        (Arch::X86_64, 34) => Some(TargetTriple::X8664Manylinux234),
+        (Arch::X86_64, 35) => Some(TargetTriple::X8664Manylinux235),
+        (Arch::X86_64, 36) => Some(TargetTriple::X8664Manylinux236),
+        (Arch::X86_64, 37) => Some(TargetTriple::X8664Manylinux237),
+        (Arch::X86_64, 38) => Some(TargetTriple::X8664Manylinux238),
+        (Arch::X86_64, 39) => Some(TargetTriple::X8664Manylinux239),
+        (Arch::X86_64, 40) => Some(TargetTriple::X8664Manylinux240),
+        (Arch::Aarch64, 17) => Some(TargetTriple::Aarch64Manylinux217),
+        (Arch::Aarch64, 28) => Some(TargetTriple::Aarch64Manylinux228),
+        (Arch::Aarch64, 31) => Some(TargetTriple::Aarch64Manylinux231),
+        (Arch::Aarch64, 32) => Some(TargetTriple::Aarch64Manylinux232),
+        (Arch::Aarch64, 33) => Some(TargetTriple::Aarch64Manylinux233),
+        (Arch::Aarch64, 34) => Some(TargetTriple::Aarch64Manylinux234),
+        (Arch::Aarch64, 35) => Some(TargetTriple::Aarch64Manylinux235),
+        (Arch::Aarch64, 36) => Some(TargetTriple::Aarch64Manylinux236),
+        (Arch::Aarch64, 37) => Some(TargetTriple::Aarch64Manylinux237),
+        (Arch::Aarch64, 38) => Some(TargetTriple::Aarch64Manylinux238),
+        (Arch::Aarch64, 39) => Some(TargetTriple::Aarch64Manylinux239),
+        (Arch::Aarch64, 40) => Some(TargetTriple::Aarch64Manylinux240),
+        _ => None,
     }
 }
 
