@@ -351,3 +351,90 @@ fn download_workspace_member_skipped_with_warning() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn download_locked_fails_on_mismatch() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+        "#,
+    )?;
+
+    // Generate the initial lockfile.
+    context.lock().assert().success();
+
+    // Mutate the requirements.
+    pyproject.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==1.1.1"]
+        "#,
+    )?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--locked")
+            .arg("-o").arg(context.temp_dir.child("out").path()),
+        @r"
+        success: false
+        exit_code: 1
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        Resolved 2 packages in [TIME]
+        The lockfile at `uv.lock` needs to be updated, but `--locked` was provided. To update the lockfile, run `uv lock`.
+        "
+    );
+    Ok(())
+}
+
+#[test]
+fn download_platform_not_in_environments() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [tool.uv]
+        environments = [
+            "sys_platform == 'linux' and platform_machine == 'x86_64' and platform_python_implementation == 'CPython'",
+        ]
+        "#,
+    )?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--platform").arg("linux")
+            .arg("--machine").arg("aarch64")
+            .arg("-o").arg(context.temp_dir.child("out").path()),
+        @r"
+        success: false
+        exit_code: 2
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        Resolved 2 packages in [TIME]
+        error: target platform not listed in `tool.uv.environments`; add this environment to `tool.uv.environments` to support cross-platform downloads
+        "
+    );
+    Ok(())
+}
