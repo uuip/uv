@@ -2704,6 +2704,9 @@ async fn run_project(
             ))
             .await
         }
+        ProjectCommand::Download(_) => {
+            anyhow::bail!("`uv download` dispatch is not wired yet (Task 6)")
+        }
     }
 }
 

@@ -16,8 +16,10 @@ use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::{
     ExportFormat, IndexStrategy, KeyringProviderType, PackageNameSpecifier, PipCompileFormat,
-    ProjectBuildBackend, TargetTriple, TrustedHost, TrustedPublishing, VersionControlSystem,
+    PlatformOs, ProjectBuildBackend, PyImpl, TargetTriple, TrustedHost, TrustedPublishing,
+    VersionControlSystem,
 };
+use uv_platform_tags::Arch;
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, Index, IndexUrl, Origin, PipExtraIndex,
     PipFindLinks, PipIndex,
@@ -1148,6 +1150,18 @@ pub enum ProjectCommand {
         after_long_help = ""
     )]
     Sync(SyncArgs),
+    /// Download the project's dependencies into a directory without installing them.
+    ///
+    /// Resolves `uv.lock` for the requested target platform and writes every wheel
+    /// (and any sdists referenced by the lockfile) into `--output-dir`.
+    ///
+    /// Does not create or modify a virtual environment. Local path, editable, and
+    /// workspace-member dependencies are skipped with a warning.
+    #[command(
+        after_help = "Use `uv help download` for more details.",
+        after_long_help = ""
+    )]
+    Download(Box<DownloadArgs>),
     /// Update the project's lockfile.
     ///
     /// If the project lockfile (`uv.lock`) does not exist, it will be created. If a lockfile is
@@ -1365,6 +1379,22 @@ fn parse_maybe_string(input: &str) -> Result<Maybe<String>, String> {
     } else {
         Ok(Maybe::Some(input.to_string()))
     }
+}
+
+fn parse_platform_os(raw: &str) -> Result<PlatformOs, String> {
+    raw.parse()
+}
+
+fn parse_platform_machine(raw: &str) -> Result<Arch, String> {
+    uv_configuration::parse_machine(raw)
+}
+
+fn parse_platform_glibc(raw: &str) -> Result<(u16, u16), String> {
+    uv_configuration::parse_glibc(raw)
+}
+
+fn parse_platform_implementation(raw: &str) -> Result<PyImpl, String> {
+    raw.parse()
 }
 
 #[derive(Args)]
@@ -4154,6 +4184,134 @@ pub struct SyncArgs {
 
     #[arg(long, overrides_with("check"), hide = true)]
     pub no_check: bool,
+}
+
+#[derive(Args)]
+pub struct DownloadArgs {
+    /// The target operating system: `linux`, `windows`, or `macos`.
+    ///
+    /// Case-insensitive. Accepts aliases `win32` for Windows and `darwin` / `osx` for macOS.
+    /// Defaults to the current host OS.
+    #[arg(long, value_parser = parse_platform_os)]
+    pub platform: Option<PlatformOs>,
+
+    /// The target machine/architecture: `x86_64`, `aarch64`, `i686`, ...
+    ///
+    /// Case-insensitive. Accepts aliases `amd64`/`x64` for `x86_64` and `arm64` for `aarch64`.
+    /// Defaults to the current host machine.
+    #[arg(long, value_parser = parse_platform_machine)]
+    pub machine: Option<Arch>,
+
+    /// The minimum glibc version, as `MAJOR.MINOR` (e.g. `2.28`).
+    ///
+    /// Only valid with `--platform=linux`. Defaults to `2.28`.
+    #[arg(long, value_parser = parse_platform_glibc)]
+    pub glibc: Option<(u16, u16)>,
+
+    /// The Python implementation. Only `CPython` is supported today.
+    #[arg(
+        long,
+        alias = "impl",
+        value_parser = parse_platform_implementation,
+        default_value = "CPython"
+    )]
+    pub implementation: PyImpl,
+
+    /// The directory to write wheels / sdists into.
+    ///
+    /// Created if missing. If the directory already contains artifacts with
+    /// the same filename, they are left untouched.
+    #[arg(
+        short = 'o',
+        long = "output-dir",
+        alias = "out",
+        value_hint = ValueHint::DirPath
+    )]
+    pub output_dir: PathBuf,
+
+    /// Include optional dependencies from the specified extra name.
+    #[arg(
+        long,
+        conflicts_with = "all_extras",
+        value_delimiter = ',',
+        value_parser = extra_name_with_clap_error,
+        value_hint = ValueHint::Other,
+    )]
+    pub extra: Option<Vec<ExtraName>>,
+
+    /// Include all optional dependencies.
+    #[arg(long, conflicts_with = "extra")]
+    pub all_extras: bool,
+
+    /// Exclude the specified optional dependencies, if `--all-extras` is supplied.
+    #[arg(long, value_hint = ValueHint::Other)]
+    pub no_extra: Vec<ExtraName>,
+
+    /// Include the development dependency group.
+    #[arg(long, overrides_with("no_dev"), hide = true, value_parser = clap::builder::BoolishValueParser::new())]
+    pub dev: bool,
+
+    /// Disable the development dependency group.
+    #[arg(long, overrides_with("dev"), value_parser = clap::builder::BoolishValueParser::new())]
+    pub no_dev: bool,
+
+    /// Only include the development dependency group.
+    #[arg(long, conflicts_with_all = ["group", "all_groups", "no_dev"])]
+    pub only_dev: bool,
+
+    /// Include dependencies from the specified dependency group.
+    #[arg(long, conflicts_with_all = ["only_group", "only_dev"], value_hint = ValueHint::Other)]
+    pub group: Vec<GroupName>,
+
+    /// Disable the specified dependency group.
+    #[arg(long, env = EnvVars::UV_NO_GROUP, value_delimiter = ' ', value_hint = ValueHint::Other)]
+    pub no_group: Vec<GroupName>,
+
+    /// Ignore the default dependency groups.
+    #[arg(long, env = EnvVars::UV_NO_DEFAULT_GROUPS, value_parser = clap::builder::BoolishValueParser::new())]
+    pub no_default_groups: bool,
+
+    /// Only include dependencies from the specified dependency group.
+    #[arg(long, conflicts_with_all = ["group", "dev", "all_groups"], value_hint = ValueHint::Other)]
+    pub only_group: Vec<GroupName>,
+
+    /// Include dependencies from all dependency groups.
+    #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
+    pub all_groups: bool,
+
+    /// Assert that the `uv.lock` will remain unchanged.
+    #[arg(long, conflicts_with_all = ["frozen"])]
+    pub locked: bool,
+
+    /// Download without updating `uv.lock`.
+    #[arg(long, conflicts_with_all = ["locked"])]
+    pub frozen: bool,
+
+    #[command(flatten)]
+    pub installer: ResolverInstallerArgs,
+
+    #[command(flatten)]
+    pub build: BuildOptionsArgs,
+
+    #[command(flatten)]
+    pub refresh: RefreshArgs,
+
+    /// The Python interpreter used to derive markers and tags.
+    ///
+    /// No virtual environment is created; the interpreter is used only to
+    /// determine target tags. If the requested interpreter is not installed
+    /// and `--python-downloads` is enabled (default), uv will fetch a managed
+    /// Python build automatically.
+    #[arg(
+        long,
+        short,
+        env = EnvVars::UV_PYTHON,
+        verbatim_doc_comment,
+        help_heading = "Python options",
+        value_parser = parse_maybe_string,
+        value_hint = ValueHint::Other,
+    )]
+    pub python: Option<Maybe<String>>,
 }
 
 #[derive(Args)]
