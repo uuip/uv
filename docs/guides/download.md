@@ -70,12 +70,16 @@ Downloaded 0 packages (25 skipped) to pkgs
 
 ## Skipped dependencies
 
-Dependencies that cannot be materialized into a portable wheel are skipped with a warning:
+Dependencies that cannot be materialized into a portable artifact are omitted from the wheelhouse:
 
-- Workspace members and the current project (they would need to be built).
-- Local `path` sources (buildable but not a stable binary artifact).
-- `editable = true` dependencies.
-- `git` sources.
+- The current project and virtual workspace roots — silently omitted (they would need to be built).
+- Other workspace members — skipped with a warning.
+- Local `path` sources — skipped with a warning (buildable but not a stable binary artifact).
+- `editable = true` dependencies — skipped with a warning.
+- `git` sources — skipped with a warning.
+
+Because the root project is omitted silently, the summary line typically reports one fewer
+`Downloaded` package than `Resolved` (or more, when workspace members are also present).
 
 The remaining resolved distributions are downloaded as `.whl` or `.tar.gz` files directly from the
 index, without any extraction or re-archiving. Registry and direct-URL artifacts are streamed
