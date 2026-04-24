@@ -19,13 +19,13 @@ use uv_configuration::{
     PlatformOs, ProjectBuildBackend, PyImpl, TargetTriple, TrustedHost, TrustedPublishing,
     VersionControlSystem,
 };
-use uv_platform_tags::Arch;
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, Index, IndexUrl, Origin, PipExtraIndex,
     PipFindLinks, PipIndex,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
 use uv_pep508::{MarkerTree, Requirement};
+use uv_platform_tags::Arch;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python::{PythonDownloads, PythonPreference, PythonVersion};
@@ -4248,6 +4248,9 @@ pub struct DownloadArgs {
     #[arg(long, value_hint = ValueHint::Other)]
     pub no_extra: Vec<ExtraName>,
 
+    #[arg(long, overrides_with("all_extras"), hide = true)]
+    pub no_all_extras: bool,
+
     /// Include the development dependency group.
     #[arg(long, overrides_with("no_dev"), hide = true, value_parser = clap::builder::BoolishValueParser::new())]
     pub dev: bool,
@@ -4280,12 +4283,18 @@ pub struct DownloadArgs {
     #[arg(long, conflicts_with_all = ["only_group", "only_dev"])]
     pub all_groups: bool,
 
-    /// Assert that the `uv.lock` will remain unchanged.
-    #[arg(long, conflicts_with_all = ["frozen"])]
+    /// Assert that the `uv.lock` will remain unchanged [env: UV_LOCKED=]
+    ///
+    /// Requires that the lockfile is up-to-date. If the lockfile is missing or needs to be updated,
+    /// uv will exit with an error.
+    #[arg(long, conflicts_with_all = ["frozen", "upgrade"])]
     pub locked: bool,
 
-    /// Download without updating `uv.lock`.
-    #[arg(long, conflicts_with_all = ["locked"])]
+    /// Download without updating `uv.lock` [env: UV_FROZEN=]
+    ///
+    /// Instead of checking if the lockfile is up-to-date, uses the versions in the lockfile as the
+    /// source of truth. If the lockfile is missing, uv will exit with an error.
+    #[arg(long, conflicts_with_all = ["locked", "upgrade", "no_sources"])]
     pub frozen: bool,
 
     #[command(flatten)]
