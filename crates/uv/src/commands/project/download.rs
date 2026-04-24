@@ -293,7 +293,8 @@ pub(crate) async fn download(
             Dist::Built(BuiltDist::Registry(built)) => {
                 let wheel = built.best_wheel();
                 let url = wheel.file.url.to_url()?;
-                let dst = output_dir.join(wheel.file.filename.as_ref());
+                let filename = sanitize_artifact_filename(wheel.file.filename.as_ref())?;
+                let dst = output_dir.join(filename);
                 // Prefer the per-file hashes published on the index; fall back to the
                 // lock-level hashes (both are authoritative for registry wheels).
                 let expected = if wheel.file.hashes.is_empty() {
@@ -320,7 +321,8 @@ pub(crate) async fn download(
             }
             Dist::Source(SourceDist::Registry(source)) => {
                 let url = source.file.url.to_url()?;
-                let dst = output_dir.join(source.file.filename.as_ref());
+                let filename = sanitize_artifact_filename(source.file.filename.as_ref())?;
+                let dst = output_dir.join(filename);
                 let expected = if source.file.hashes.is_empty() {
                     hashes
                 } else {
@@ -472,9 +474,18 @@ async fn download_to(
         }
     }
 
+    // TODO: stream the response body (`response.bytes_stream()`) to disk and hash it
+    // incrementally. The current `response.bytes().await` pulls the full artifact into
+    // memory, which is fine for typical wheels but wasteful for large ML distributions.
+
     // Write to a partial file first for atomicity.
-    fs_err::write(&partial, &body)
-        .map_err(|err| anyhow::anyhow!("failed to write `{}`: {err}", partial.display()))?;
+    if let Err(err) = fs_err::write(&partial, &body) {
+        let _ = fs_err::remove_file(&partial);
+        return Err(anyhow::anyhow!(
+            "failed to write `{}`: {err}",
+            partial.display()
+        ));
+    }
 
     if let Err(err) = fs_err::rename(&partial, dst) {
         let _ = fs_err::remove_file(&partial);
