@@ -34,13 +34,13 @@ environment configuration.
 
 ## Flags
 
-| Flag                 | Default             | Accepts                                                                                      |
-| -------------------- | ------------------- | -------------------------------------------------------------------------------------------- |
-| `--platform`         | host OS             | `linux`, `windows` (alias `win32`), `macos` (aliases `darwin`, `osx`)                        |
-| `--machine`          | host arch           | `x86_64`, `amd64`, `AMD64`, `x64`, `aarch64`, `arm64`, `i686`, `i386`, `x86`, `riscv64`, ... |
-| `--glibc`            | `2.28` (Linux only) | `MAJOR.MINOR` (e.g. `2.28`) or `MAJOR_MINOR` (e.g. `2_28`)                                   |
-| `--implementation`   | `CPython`           | `CPython` only (other implementations deferred)                                              |
-| `-o`, `--output-dir` | required            | any directory, created if missing                                                            |
+| Flag                 | Default             | Accepts                                                                                                                            |
+| -------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `--platform`         | host OS             | `linux`, `windows` (alias `win32`), `macos` (aliases `darwin`, `osx`)                                                              |
+| `--machine`          | host arch           | `x86_64`, `aarch64`, `i686` (Windows only), `riscv64` (Linux only); aliases incl. `amd64`, `x86-64`, `x64`, `arm64`, `i386`, `x86` |
+| `--glibc`            | `2.28` (Linux only) | `MAJOR.MINOR` (e.g. `2.28`) or `MAJOR_MINOR` (e.g. `2_28`)                                                                         |
+| `--implementation`   | `CPython`           | `CPython` only (other implementations deferred)                                                                                    |
+| `-o`, `--output-dir` | required            | any directory, created if missing                                                                                                  |
 
 All values are case-insensitive. `--glibc` is rejected for non-Linux targets.
 

@@ -691,6 +691,66 @@ impl uv_python::downloads::Reporter for PythonDownloadReporter {
     }
 }
 
+/// Progress reporter for `uv download`, which streams wheel/sdist artifacts directly to
+/// the output directory without going through the preparer.
+///
+/// Mirrors [`PrepareReporter`] — a top-level "Downloading packages..." spinner with
+/// `(pos/len)` counter and per-artifact byte-level sub-bars — but is wired directly to
+/// the raw HTTP stream in `download` instead of the installer's preparer.
+#[derive(Debug)]
+pub(crate) struct DownloadProjectReporter {
+    reporter: ProgressReporter,
+}
+
+impl DownloadProjectReporter {
+    pub(crate) fn new(printer: Printer, length: u64) -> Self {
+        let multi_progress = MultiProgress::with_draw_target(printer.target());
+        let root = multi_progress.add(ProgressBar::with_draw_target(Some(length), printer.target()));
+        root.enable_steady_tick(Duration::from_millis(200));
+        root.set_style(
+            ProgressStyle::with_template("{spinner:.white} {msg:.dim} ({pos}/{len})")
+                .unwrap()
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+        );
+        root.set_message("Downloading packages...");
+
+        let reporter = ProgressReporter::new(root, multi_progress, printer);
+        Self { reporter }
+    }
+
+    /// Open a byte-level bar for a single artifact download; call on HTTP 200 once
+    /// `content_length` is known.
+    pub(crate) fn on_download_start(&self, name: String, size: Option<u64>) -> usize {
+        self.reporter.on_download_start(name, size)
+    }
+
+    pub(crate) fn on_download_progress(&self, id: usize, bytes: u64) {
+        self.reporter.on_download_progress(id, bytes);
+    }
+
+    /// Close the per-artifact byte-level bar.
+    ///
+    /// Only paired with [`Self::on_download_start`] on the write path; files that are
+    /// already materialized don't open a byte bar, so they must not call this. Root
+    /// counter progression is handled separately by [`Self::on_task_done`] so that
+    /// skipped-because-already-exists tasks still count toward `(pos/len)`.
+    pub(crate) fn on_download_complete(&self, id: usize) {
+        self.reporter.on_download_complete(id);
+    }
+
+    /// Tick the root `(pos/len)` counter — call once per finished task, regardless
+    /// of whether it actually hit the network.
+    pub(crate) fn on_task_done(&self) {
+        self.reporter.root.inc(1);
+    }
+
+    /// Clear the root spinner once all downloads have finished.
+    pub(crate) fn on_complete(&self) {
+        self.reporter.root.set_message("");
+        self.reporter.root.finish_and_clear();
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PublishReporter {
     reporter: ProgressReporter,
