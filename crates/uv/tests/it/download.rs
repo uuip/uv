@@ -1,6 +1,7 @@
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
+use sha2::{Digest, Sha256};
 
 use uv_test::uv_snapshot;
 
@@ -29,7 +30,6 @@ fn download_basic_native_platform() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 2 packages in [TIME]
-    warning: Skipping local/editable source `project` (not materialized into --output-dir)
     Downloaded 1 package (0 skipped) to [TEMP_DIR]/pkgs
     ");
 
@@ -281,7 +281,6 @@ fn download_reruns_are_idempotent() -> Result<()> {
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Resolved 2 packages in [TIME]
-        warning: Skipping local/editable source `project` (not materialized into --output-dir)
         Downloaded 0 packages (1 skipped) to [TEMP_DIR]/pkgs
         "
     );
@@ -435,6 +434,113 @@ fn download_platform_not_in_environments() -> Result<()> {
         Resolved 2 packages in [TIME]
         error: target platform not listed in `tool.uv.environments`; add this environment to `tool.uv.environments` to support cross-platform downloads
         "
+    );
+    Ok(())
+}
+
+#[test]
+fn download_wheel_hash_matches_lockfile() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    // Read the recorded hash from uv.lock — look for the wheel entry (contains ".whl").
+    let lock_contents = fs_err::read_to_string(context.temp_dir.child("uv.lock").path())?;
+    let recorded_sha = lock_contents
+        .lines()
+        .filter(|line| line.contains(".whl"))
+        .find_map(|line| {
+            line.split("hash = \"sha256:")
+                .nth(1)
+                .and_then(|tail| tail.split('"').next().map(str::to_owned))
+        })
+        .ok_or_else(|| anyhow::anyhow!("failed to find wheel sha256 in uv.lock:\n{lock_contents}"))?;
+
+    // Find the iniconfig wheel in out-dir and hash it.
+    let wheel = fs_err::read_dir(out.path())?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("iniconfig-")
+                        && std::path::Path::new(name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+                })
+        })
+        .ok_or_else(|| anyhow::anyhow!("no iniconfig wheel in {:?}", out.path()))?;
+
+    let bytes = fs_err::read(&wheel)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let actual = format!("{:x}", hasher.finalize());
+
+    assert_eq!(actual, recorded_sha, "downloaded wheel sha must match uv.lock");
+    Ok(())
+}
+
+#[test]
+fn download_no_binary_produces_sdist_only() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("--no-binary")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let names: Vec<String> = fs_err::read_dir(out.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().into_string().unwrap_or_default())
+        .collect();
+
+    assert!(
+        names.iter().any(|n| {
+            n.starts_with("iniconfig-")
+                && (n.ends_with(".tar.gz")
+                    || std::path::Path::new(n)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip")))
+        }),
+        "expected iniconfig sdist in {names:?}",
+    );
+    assert!(
+        !names.iter().any(|n| {
+            n.starts_with("iniconfig-")
+                && std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+        }),
+        "no .whl should be produced when --no-binary=:all: is set, got {names:?}",
     );
     Ok(())
 }
