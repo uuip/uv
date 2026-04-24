@@ -6,6 +6,9 @@ use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
+use walkdir::WalkDir;
+use zip::ZipWriter;
+use zip::write::FileOptions;
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, FlatIndexClient, RegistryClientBuilder};
@@ -143,9 +146,9 @@ pub(crate) async fn download(
     let mode = if let Some(frozen_source) = frozen {
         LockMode::Frozen(frozen_source.into())
     } else {
-        let interpreter = maybe_interpreter
-            .as_ref()
-            .expect("interpreter is Some when not frozen");
+        let Some(interpreter) = maybe_interpreter.as_ref() else {
+            bail!("internal error: interpreter should be resolved when not frozen");
+        };
         if let LockCheck::Enabled(lock_check_source) = lock_check {
             LockMode::Locked(interpreter, lock_check_source)
         } else {
@@ -229,10 +232,9 @@ pub(crate) async fn download(
         None
     };
 
-    let interpreter = frozen_interpreter
-        .as_ref()
-        .or(maybe_interpreter.as_ref())
-        .expect("interpreter is always Some at this point");
+    let Some(interpreter) = frozen_interpreter.as_ref().or(maybe_interpreter.as_ref()) else {
+        bail!("internal error: interpreter should be resolved at this point");
+    };
 
     // 6. Compute marker environment and tags for the target platform.
     let marker_env = resolution_markers(None, Some(&target_triple), interpreter);
@@ -392,7 +394,12 @@ pub(crate) async fn download(
     Ok(ExitStatus::Success)
 }
 
-/// Build an [`InstallTarget`] that covers the whole workspace.
+/// Build an [`InstallTarget`] for the download command.
+///
+/// Always targets the full workspace for [`VirtualProject::Project`] (equivalent
+/// to `uv sync --all-packages`) because a wheelhouse is typically populated
+/// across all members. Spec §4.3. If single-root or package-selected
+/// materialization is needed later, this is the place to thread a filter.
 fn make_install_target<'a>(project: &'a VirtualProject, lock: &'a Lock) -> InstallTarget<'a> {
     match project {
         VirtualProject::Project(p) => InstallTarget::Workspace {
@@ -427,6 +434,13 @@ fn filter_local_sources(resolution: Resolution) -> Resolution {
                 );
                 false
             }
+            Dist::Source(SourceDist::Path(p)) => {
+                warn_user!(
+                    "Skipping local path source `{}` (not materialized into --output-dir)",
+                    p.name
+                );
+                false
+            }
             _ => true,
         }
     })
@@ -439,16 +453,22 @@ struct DownloadReport {
     skipped: usize,
 }
 
-/// Write each cached wheel to `out_dir` as a `.whl` archive.
+/// Materialize the given [`CachedDist`] entries into `out_dir` as `.whl` files.
 ///
-/// uv's cache stores wheels as **unzipped directories** (the `Archive` bucket). We re-zip each
-/// one using DEFLATE compression to produce a standard `.whl` ZIP archive. If the destination
-/// already exists we count it as skipped, making the operation idempotent.
+/// uv's cache holds wheels in extracted form, so this function re-archives each
+/// cache directory into a `.whl` using DEFLATE compression.
+///
+/// # Known limitation
+///
+/// The re-zipped output is functionally equivalent to the upstream wheel, but
+/// its SHA-256 will NOT match the hash stored in `uv.lock` or published on
+/// PyPI. Downstream tools that re-verify wheels against those hashes
+/// (`pip install --require-hashes`, `pip-audit`, etc.) will reject the output.
+///
+/// TODO: Teach `operations::prepare` (or `DistributionDatabase`) to retain the
+/// original wheel bytes alongside the extracted archive, then hard-link from
+/// there into `out_dir` instead of re-archiving.
 fn materialize_to_out(cached: &[CachedDist], out_dir: &Path) -> Result<DownloadReport> {
-    use walkdir::WalkDir;
-    use zip::ZipWriter;
-    use zip::write::FileOptions;
-
     fs_err::create_dir_all(out_dir)?;
 
     let mut report = DownloadReport::default();
@@ -487,9 +507,13 @@ fn materialize_to_out(cached: &[CachedDist], out_dir: &Path) -> Result<DownloadR
                     anyhow::anyhow!("error reading wheel directory `{}`: {e}", src.display())
                 })?;
                 let path = entry.path();
-                let relative = path
-                    .strip_prefix(src)
-                    .expect("WalkDir yields paths under root");
+                let relative = path.strip_prefix(src).map_err(|_| {
+                    anyhow::anyhow!(
+                        "WalkDir yielded path `{}` not under root `{}`",
+                        path.display(),
+                        src.display()
+                    )
+                })?;
 
                 let name = relative.to_str().ok_or_else(|| {
                     anyhow::anyhow!("non-UTF-8 path inside wheel: {}", path.display())
