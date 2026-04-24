@@ -4196,18 +4196,19 @@ pub struct DownloadArgs {
     #[arg(long, value_parser = parse_platform_os)]
     pub platform: Option<PlatformOs>,
 
-    /// The target machine/architecture: `x86_64`, `aarch64`, `i686`, ...
+    /// The target machine/architecture, e.g. `x64`, `aarch64`. Defaults to the current host machine. Run `uv help download` for all supported values.
     ///
-    /// Case-insensitive. Accepts aliases `amd64`/`x64` for `x86_64` and `arm64` for `aarch64`.
-    /// Defaults to the current host machine.
+    /// Supported values: `x86_64` (aliases `amd64`, `x86-64`, `x64`), `aarch64` (alias `arm64`),
+    /// `i686` (aliases `i386`, `x86`; Windows only), and `riscv64` (Linux only). Case-insensitive.
     #[arg(long, value_parser = parse_platform_machine)]
     pub machine: Option<Arch>,
 
-    /// The target manylinux glibc baseline, as `MAJOR.MINOR` (e.g. `2.28`).
+    /// The target manylinux glibc baseline, as `MAJOR.MINOR` (e.g. `2.28`) [default: 2.28].
     ///
     /// This is the manylinux compatibility level the downloaded wheels must match
     /// (e.g. `2.28` selects `manylinux_2_28` wheels); it is *not* a probe of the
-    /// host's glibc. Only valid with `--platform=linux`; defaults to `2.28`.
+    /// host's glibc. Only valid with `--platform=linux`. Supported values: `2.17`,
+    /// `2.28`, `2.31`–`2.40`.
     #[arg(long, value_parser = parse_platform_glibc)]
     pub glibc: Option<(u16, u16)>,
 
