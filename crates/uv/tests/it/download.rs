@@ -203,3 +203,151 @@ fn download_missing_output_dir() {
         "
     );
 }
+
+#[test]
+fn download_linux_aarch64_manylinux_2_28() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["charset-normalizer==3.3.2"]
+
+        [tool.uv]
+        environments = [
+            "sys_platform == 'linux' and platform_machine == 'aarch64' and platform_python_implementation == 'CPython'",
+        ]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+
+    context
+        .download()
+        .arg("--platform")
+        .arg("linux")
+        .arg("--machine")
+        .arg("aarch64")
+        .arg("--glibc")
+        .arg("2.28")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let has_aarch64 = fs_err::read_dir(out.path())?.any(|entry| {
+        entry
+            .ok()
+            .map(|e| e.file_name().to_string_lossy().contains("aarch64"))
+            .unwrap_or(false)
+    });
+    assert!(has_aarch64, "expected an aarch64 wheel in {:?}", out.path());
+    Ok(())
+}
+
+#[test]
+fn download_reruns_are_idempotent() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    // Second run should report 0 written and 1 skipped.
+    uv_snapshot!(
+        context.filters(),
+        context.download().arg("-o").arg(out.path()),
+        @r"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        Resolved 2 packages in [TIME]
+        warning: Skipping local/editable source `project` (not materialized into --output-dir)
+        Downloaded 0 packages (1 skipped) to [TEMP_DIR]/pkgs
+        "
+    );
+    Ok(())
+}
+
+#[test]
+fn download_workspace_member_skipped_with_warning() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child", "iniconfig"]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        "#,
+    )?;
+
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+
+    let assert = context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("Skipping local/editable source `child`"),
+        "expected `child` skip warning, got stderr:\n{stderr}"
+    );
+
+    let mut entries: Vec<String> = fs_err::read_dir(out.path())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().into_string().unwrap_or_default())
+        .collect();
+    entries.sort();
+    assert!(
+        !entries.iter().any(|name| name.starts_with("child-")),
+        "child wheel should NOT have been downloaded: {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|name| name.starts_with("iniconfig-")),
+        "iniconfig wheel missing: {entries:?}"
+    );
+    Ok(())
+}
