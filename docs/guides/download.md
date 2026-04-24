@@ -10,7 +10,6 @@ image in multiple layers, or hand off a frozen artifact set to another environme
 ```console
 $ uv download -o pkgs
 Resolved 25 packages in 142ms
-Prepared 25 packages in 812ms
 Downloaded 25 packages (0 skipped) to pkgs
 ```
 
