@@ -1783,7 +1783,7 @@ pub(crate) struct DownloadSettings {
     pub(crate) implementation: PyImpl,
     pub(crate) python: Option<String>,
     pub(crate) install_mirrors: PythonInstallMirrors,
-    pub(crate) settings: ResolverInstallerSettings,
+    pub(crate) settings: ResolverSettings,
     pub(crate) refresh: Refresh,
 }
 
@@ -1809,7 +1809,7 @@ impl DownloadSettings {
             all_groups,
             locked,
             frozen,
-            installer,
+            resolver,
             build,
             refresh,
             python,
@@ -1825,10 +1825,7 @@ impl DownloadSettings {
             .map(|fs| fs.install_mirrors.clone())
             .unwrap_or_default();
 
-        let settings = ResolverInstallerSettings::combine(
-            resolver_installer_options(installer, build),
-            filesystem,
-        );
+        let settings = ResolverSettings::combine(resolver_options(resolver, build), filesystem);
 
         let dev = dev || environment.dev.value == Some(true);
         let no_dev = no_dev || environment.no_dev.value == Some(true);
@@ -1876,28 +1873,55 @@ impl DownloadSettings {
 }
 
 fn host_platform_os() -> PlatformOs {
-    if cfg!(target_os = "linux") {
+    #[cfg(target_os = "linux")]
+    {
         PlatformOs::Linux
-    } else if cfg!(target_os = "windows") {
+    }
+    #[cfg(target_os = "windows")]
+    {
         PlatformOs::Windows
-    } else {
+    }
+    #[cfg(target_os = "macos")]
+    {
         PlatformOs::Macos
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        compile_error!(
+            "uv download: host target_os must be one of `linux`, `windows`, `macos`; \
+             the download command needs a host-platform default for `--platform`."
+        )
     }
 }
 
 fn host_platform_machine() -> Arch {
-    if cfg!(target_arch = "x86_64") {
+    #[cfg(target_arch = "x86_64")]
+    {
         Arch::X86_64
-    } else if cfg!(target_arch = "aarch64") {
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
         Arch::Aarch64
-    } else if cfg!(target_arch = "x86") {
+    }
+    #[cfg(target_arch = "x86")]
+    {
         Arch::X86
-    } else if cfg!(target_arch = "riscv64") {
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
         Arch::Riscv64
-    } else {
-        // Unknown host architecture; default to x86_64. The user can
-        // override with --machine.
-        Arch::X86_64
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "x86",
+        target_arch = "riscv64"
+    )))]
+    {
+        compile_error!(
+            "uv download: host target_arch must be one of `x86_64`, `aarch64`, `x86`, `riscv64`; \
+             the download command needs a host-machine default for `--machine`."
+        )
     }
 }
 

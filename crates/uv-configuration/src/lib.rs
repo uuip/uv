@@ -22,9 +22,7 @@ pub use target_triple::*;
 
 mod platform_spec;
 
-pub use platform_spec::{
-    parse_glibc, parse_machine, PlatformOs, PlatformSpec, PyImpl,
-};
+pub use platform_spec::{parse_glibc, parse_machine, PlatformOs, PyImpl};
 pub use threading::*;
 
 pub use trusted_host::*;

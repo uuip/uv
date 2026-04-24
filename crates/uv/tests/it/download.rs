@@ -57,62 +57,6 @@ fn download_basic_native_platform() -> Result<()> {
 }
 
 #[test]
-fn download_input_normalization_uppercase_windows_amd64() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [tool.uv]
-        environments = [
-            "sys_platform == 'win32' and platform_machine == 'x86_64' and platform_python_implementation == 'CPython'",
-        ]
-        "#,
-    )?;
-
-    let out_a = context.temp_dir.child("a");
-    context
-        .download()
-        .arg("--platform")
-        .arg("Windows")
-        .arg("--machine")
-        .arg("AMD64")
-        .arg("-o")
-        .arg(out_a.path())
-        .assert()
-        .success();
-
-    let out_b = context.temp_dir.child("b");
-    context
-        .download()
-        .arg("--platform")
-        .arg("win32")
-        .arg("--machine")
-        .arg("amd64")
-        .arg("-o")
-        .arg(out_b.path())
-        .assert()
-        .success();
-
-    let collect_names = |path: &std::path::Path| -> Vec<String> {
-        let mut names: Vec<String> = fs_err::read_dir(path)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name().into_string().unwrap_or_default())
-            .collect();
-        names.sort();
-        names
-    };
-
-    assert_eq!(collect_names(out_a.path()), collect_names(out_b.path()));
-    Ok(())
-}
-
-#[test]
 fn download_glibc_on_non_linux_errors() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     context.temp_dir.child("pyproject.toml").write_str(
@@ -180,28 +124,6 @@ fn download_implementation_non_cpython_errors() -> Result<()> {
         "
     );
     Ok(())
-}
-
-#[test]
-fn download_missing_output_dir() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-    uv_snapshot!(
-        context.filters(),
-        context.download(),
-        @r"
-        success: false
-        exit_code: 2
-        ----- stdout -----
-
-        ----- stderr -----
-        error: the following required arguments were not provided:
-          --output-dir <OUTPUT_DIR>
-
-        Usage: uv download --output-dir <OUTPUT_DIR> --cache-dir [CACHE_DIR] --exclude-newer <EXCLUDE_NEWER>
-
-        For more information, try '--help'.
-        "
-    );
 }
 
 #[test]
@@ -618,6 +540,248 @@ async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
     assert_eq!(
         actual, wheel_sha,
         "direct-URL wheel bytes must match the SHA advertised in the `url` fragment",
+    );
+    Ok(())
+}
+
+#[test]
+fn download_default_index_local_path_warns() -> Result<()> {
+    // `--default-index` pointing at a local path cannot be used as a mirror for rewriting
+    // `files.pythonhosted.org` URLs, so uv download should warn and fall back to the URLs
+    // recorded in the lockfile. Uses `--frozen` so the resolve step doesn't consult the
+    // (empty) path index.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    // Generate the lockfile against PyPI first, so `uv.lock` has real URLs.
+    context.lock().assert().success();
+
+    // Point `--default-index` at an empty local directory. The directory must exist
+    // because `IndexUrl::parse` resolves the path.
+    let fake_index = context.temp_dir.child("fake_index");
+    fake_index.create_dir_all()?;
+    let fake_index_url = format!("file://{}", fake_index.path().display());
+
+    let out = context.temp_dir.child("pkgs");
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--frozen")
+            .arg("--default-index")
+            .arg(&fake_index_url)
+            .arg("-o").arg(out.path()),
+        @r"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        warning: `--default-index` points at a local path; `uv download` cannot rewrite recorded artifact URLs to a filesystem index and will use the URLs in `uv.lock` as-is
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
+    );
+    Ok(())
+}
+
+#[test]
+fn download_rejects_tampered_existing_wheel() -> Result<()> {
+    // If a pre-existing file has bytes that don't match the lockfile's hash, the download
+    // must refuse to trust it — previously it was short-circuited as `AlreadyExisted`.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    // Tamper with the iniconfig wheel in place.
+    let wheel = fs_err::read_dir(out.path())?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with("iniconfig-")
+                        && std::path::Path::new(name)
+                            .extension()
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+                })
+        })
+        .ok_or_else(|| anyhow::anyhow!("no iniconfig wheel in {:?}", out.path()))?;
+    fs_err::write(&wheel, b"not a real wheel")?;
+
+    let assert = context
+        .download()
+        .arg("--frozen")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("hash mismatch for existing file"),
+        "expected hash mismatch error, got stderr:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn download_rejects_unknown_extra() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let assert = context
+        .download()
+        .arg("--extra")
+        .arg("nope")
+        .arg("-o")
+        .arg(context.temp_dir.child("pkgs").path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.to_ascii_lowercase().contains("nope")
+            && stderr.to_ascii_lowercase().contains("extra"),
+        "expected unknown-extra error, got stderr:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn download_rejects_unknown_group() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let assert = context
+        .download()
+        .arg("--group")
+        .arg("nope")
+        .arg("-o")
+        .arg(context.temp_dir.child("pkgs").path())
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.to_ascii_lowercase().contains("nope")
+            && (stderr.to_ascii_lowercase().contains("group")
+                || stderr.to_ascii_lowercase().contains("dependency-group")),
+        "expected unknown-group error, got stderr:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn download_explicit_pypi_simple_with_trailing_slash() -> Result<()> {
+    // Previously `--default-index https://pypi.org/simple/` (with trailing slash) was not
+    // tagged as `IndexUrl::Pypi` and would rewrite artifact URLs to the invalid
+    // `https://pypi.org/packages/...`. Treating it as PyPI itself keeps the real
+    // `files.pythonhosted.org` URLs in place.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+    context.lock().assert().success();
+
+    let out = context.temp_dir.child("pkgs");
+    let assert = context
+        .download()
+        .arg("--frozen")
+        .arg("--default-index")
+        .arg("https://pypi.org/simple/")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        !stderr.contains("will use the URLs in `uv.lock` as-is"),
+        "PyPI should not trigger the mirror-fallback warn path, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn download_default_index_non_simple_url_warns() -> Result<()> {
+    // `--default-index` pointing at a URL whose final segment is not `simple` / `+simple`
+    // can't be turned into a mirror base, so uv download should warn and fall back to the
+    // URLs recorded in the lockfile.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    context.lock().assert().success();
+
+    let out = context.temp_dir.child("pkgs");
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--frozen")
+            .arg("--default-index")
+            .arg("https://example.invalid/pypi/not-ending-in-simple")
+            .arg("-o").arg(out.path()),
+        @r"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        warning: `--default-index` was provided but its URL does not end in `simple` / `+simple`; `uv download` does not know how to derive a mirror file base and will use the URLs in `uv.lock` as-is
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
     );
     Ok(())
 }

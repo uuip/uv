@@ -4302,7 +4302,7 @@ pub struct DownloadArgs {
     pub frozen: bool,
 
     #[command(flatten)]
-    pub installer: ResolverInstallerArgs,
+    pub resolver: ResolverArgs,
 
     #[command(flatten)]
     pub build: BuildOptionsArgs,

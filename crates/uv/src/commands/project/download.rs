@@ -15,7 +15,7 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, DependencyGroups, DependencyGroupsWithDefaults, ExtrasSpecification,
-    InstallOptions, PlatformOs, PlatformSpec, PyImpl, TargetTriple,
+    InstallOptions, PlatformOs, PyImpl, TargetTriple,
 };
 use uv_distribution_types::{BuiltDist, Dist, IndexUrl, RemoteSource, ResolvedDist, SourceDist};
 use uv_extract::hash::Hasher;
@@ -23,7 +23,7 @@ use uv_normalize::DefaultExtras;
 use uv_platform_tags::Arch;
 use uv_preview::Preview;
 use uv_pypi_types::HashDigest;
-use uv_python::{Interpreter, PythonDownloads, PythonPreference, PythonRequest};
+use uv_python::{PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{Installable, Lock};
 use uv_settings::PythonInstallMirrors;
@@ -32,16 +32,18 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceC
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::pip::{resolution_markers, resolution_tags};
+use crate::commands::project::download_platform::PlatformSpec;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     ProjectError, ProjectInterpreter, UniversalState, WorkspacePython, default_dependency_groups,
+    detect_conflicts, store_credentials_from_target,
 };
 use crate::commands::reporters::DownloadProjectReporter;
 use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
+use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
 /// Download the project's pinned dependencies as wheel or sdist files into `output_dir`.
 ///
@@ -67,7 +69,7 @@ pub(crate) async fn download(
     install_mirrors: PythonInstallMirrors,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    settings: ResolverInstallerSettings,
+    settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
     no_config: bool,
@@ -76,16 +78,10 @@ pub(crate) async fn download(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    // 1. Build PlatformSpec -> TargetTriple for the requested target platform.
-    let spec = PlatformSpec::from_parts(
-        Some(platform),
-        Some(machine),
-        glibc,
-        Some(implementation),
-        platform,
-        machine,
-    )
-    .map_err(|e| anyhow::anyhow!(e))?;
+    // 1. Build PlatformSpec -> TargetTriple for the requested target platform. Host
+    //    defaults for platform/machine are already filled in by `DownloadSettings::resolve`.
+    let spec = PlatformSpec::new(platform, machine, glibc, implementation)
+        .map_err(|e| anyhow::anyhow!(e))?;
     let target_triple: TargetTriple = spec.to_target_triple().map_err(|e| anyhow::anyhow!(e))?;
 
     // 2. Discover the project workspace (no venv creation).
@@ -111,53 +107,44 @@ pub(crate) async fn download(
     // Initialize shared state for locking.
     let state = UniversalState::default();
 
-    // 3. Resolve the interpreter. Declared here so it outlives `mode`.
-    //    When frozen, we skip this now and do it after the lock step.
-    let maybe_interpreter: Option<Interpreter> = if frozen.is_some() {
-        None
-    } else {
-        let groups_for_discovery = DependencyGroupsWithDefaults::none();
-        let workspace_python = WorkspacePython::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(project.workspace()),
-            &groups_for_discovery,
-            project_dir,
-            no_config,
-        )
-        .await?;
-        Some(
-            ProjectInterpreter::discover(
-                project.workspace(),
-                &groups_for_discovery,
-                workspace_python,
-                &client_builder,
-                python_preference,
-                python_downloads,
-                &install_mirrors,
-                false,
-                // `Some(false)` prevents ProjectInterpreter from creating a venv.
-                Some(false),
-                cache,
-                printer,
-                preview,
-            )
-            .await?
-            .into_interpreter(),
-        )
-    };
+    // 3. Resolve the interpreter. `Some(false)` tells `ProjectInterpreter` not to create
+    //    a venv — we only need the interpreter to derive markers and tags. We discover
+    //    it unconditionally (regardless of `--frozen`) because the discovery doesn't
+    //    depend on the lock; this mirrors how `uv sync` resolves its environment before
+    //    `LockMode` is computed.
+    let groups_for_discovery = DependencyGroupsWithDefaults::none();
+    let workspace_python = WorkspacePython::from_request(
+        python.as_deref().map(PythonRequest::parse),
+        Some(project.workspace()),
+        &groups_for_discovery,
+        project_dir,
+        no_config,
+    )
+    .await?;
+    let interpreter = ProjectInterpreter::discover(
+        project.workspace(),
+        &groups_for_discovery,
+        workspace_python,
+        &client_builder,
+        python_preference,
+        python_downloads,
+        &install_mirrors,
+        false,
+        Some(false),
+        cache,
+        printer,
+        preview,
+    )
+    .await?
+    .into_interpreter();
 
     // 4. Determine lock mode from `--locked` / `--frozen` / default write.
     let mode = if let Some(frozen_source) = frozen {
         LockMode::Frozen(frozen_source.into())
+    } else if let LockCheck::Enabled(lock_check_source) = lock_check {
+        LockMode::Locked(&interpreter, lock_check_source)
     } else {
-        let Some(interpreter) = maybe_interpreter.as_ref() else {
-            bail!("internal error: interpreter should be resolved when not frozen");
-        };
-        if let LockCheck::Enabled(lock_check_source) = lock_check {
-            LockMode::Locked(interpreter, lock_check_source)
-        } else {
-            LockMode::Write(interpreter)
-        }
+        LockMode::Write(&interpreter)
     };
 
     // 5. Execute the lock operation (resolve / read the lockfile).
@@ -166,7 +153,7 @@ pub(crate) async fn download(
     let outcome = match Box::pin(
         LockOperation::new(
             mode,
-            &settings.resolver,
+            &settings,
             &client_builder,
             &state,
             Box::new(DefaultResolveLogger),
@@ -203,46 +190,9 @@ pub(crate) async fn download(
 
     let lock = outcome.lock();
 
-    // When frozen, discover the interpreter now (needed for marker/tag evaluation).
-    let frozen_interpreter: Option<Interpreter> = if frozen.is_some() {
-        let groups_for_discovery = DependencyGroupsWithDefaults::none();
-        let workspace_python = WorkspacePython::from_request(
-            python.as_deref().map(PythonRequest::parse),
-            Some(project.workspace()),
-            &groups_for_discovery,
-            project_dir,
-            no_config,
-        )
-        .await?;
-        Some(
-            ProjectInterpreter::discover(
-                project.workspace(),
-                &groups_for_discovery,
-                workspace_python,
-                &client_builder,
-                python_preference,
-                python_downloads,
-                &install_mirrors,
-                false,
-                Some(false),
-                cache,
-                printer,
-                preview,
-            )
-            .await?
-            .into_interpreter(),
-        )
-    } else {
-        None
-    };
-
-    let Some(interpreter) = frozen_interpreter.as_ref().or(maybe_interpreter.as_ref()) else {
-        bail!("internal error: interpreter should be resolved at this point");
-    };
-
     // 6. Compute marker environment and tags for the target platform.
-    let marker_env = resolution_markers(None, Some(&target_triple), interpreter);
-    let tags = resolution_tags(None, Some(&target_triple), interpreter)?;
+    let marker_env = resolution_markers(None, Some(&target_triple), &interpreter);
+    let tags = resolution_tags(None, Some(&target_triple), &interpreter)?;
 
     // 7. Validate the target platform against the lock's supported environments.
     let environments = lock.supported_environments();
@@ -258,6 +208,13 @@ pub(crate) async fn download(
     // Build an InstallTarget covering the full workspace so all packages are included.
     let install_target = make_install_target(&project, lock);
 
+    // Validate extras, groups, and conflict sets before materializing — mirrors `uv sync` /
+    // `uv export` so a typo'd `--extra foo` or a configured conflict fails loudly here
+    // instead of silently producing an empty or invalid wheelhouse.
+    detect_conflicts(&install_target, &extras, &groups)?;
+    install_target.validate_extras(&extras)?;
+    install_target.validate_groups(&groups)?;
+
     // 8. Convert the lock to a Resolution for the target platform.
     let install_options = InstallOptions::default();
     let resolution = install_target.to_resolution(
@@ -265,15 +222,20 @@ pub(crate) async fn download(
         &tags,
         &extras,
         &groups,
-        &settings.resolver.build_options,
+        &settings.build_options,
         &install_options,
     )?;
 
     // 9. Build RegistryClient for direct-URL downloads.
-    let index_locations = &settings.resolver.index_locations;
-    let index_strategy = settings.resolver.index_strategy;
-    let keyring_provider = settings.resolver.keyring_provider;
+    let index_locations = &settings.index_locations;
+    let index_strategy = settings.index_strategy;
+    let keyring_provider = settings.keyring_provider;
     let client_builder = client_builder.clone().keyring(keyring_provider);
+
+    // Populate credentials from the target — `uv.lock` does not persist plaintext creds,
+    // so under `--frozen` we rely on `pyproject.toml` (`tool.uv.sources`, direct-URL deps,
+    // `--index` auth) to hydrate the client before any request goes out.
+    store_credentials_from_target(install_target, &client_builder);
 
     // If the user explicitly pointed `--default-index` at a non-PyPI mirror, rewrite the
     // Registry artifact URLs stored in the lockfile to point at that mirror. The lockfile
@@ -285,7 +247,7 @@ pub(crate) async fn download(
     // ignore the flag when the shape is one we don't know how to turn into a file base —
     // a silent no-op here is confusing, especially for local-path indexes.
     let mirror_base = match index_locations.default_index() {
-        Some(index) if matches!(index.url, IndexUrl::Pypi(_)) => None,
+        Some(index) if is_pypi_default(&index.url) => None,
         Some(index) => match (&index.url, index.url.root()) {
             (IndexUrl::Path(_), _) => {
                 warn_user!(
@@ -375,7 +337,7 @@ pub(crate) async fn download(
             }
             Dist::Built(BuiltDist::Path(local)) => {
                 let dst = output_dir.join(local.filename.to_string());
-                report.record(copy_or_link(&local.install_path, &dst)?);
+                report.record(copy_or_link(&local.install_path, &dst, hashes)?);
             }
             Dist::Source(SourceDist::Registry(source)) => {
                 let url = rewrite_registry_url(source.file.url.to_url()?, mirror_base.as_ref());
@@ -575,7 +537,10 @@ async fn download_to(
     // Only treat an existing regular file as already-materialized. Directories,
     // symlinks, or other exotica are an error so we don't silently skip them.
     match fs_err::symlink_metadata(dst) {
-        Ok(metadata) if metadata.is_file() => return Ok(MaterializeOutcome::AlreadyExisted),
+        Ok(metadata) if metadata.is_file() => {
+            verify_existing_file(dst, expected_hashes)?;
+            return Ok(MaterializeOutcome::AlreadyExisted);
+        }
         Ok(_) => bail!(
             "refusing to overwrite non-file entry at `{}`",
             dst.display()
@@ -675,6 +640,11 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
     if trimmed.contains('/') || trimmed.contains('\\') {
         bail!("refusing to materialize artifact with path separator in filename: `{raw}`");
     }
+    // NUL bytes are silently truncated by Windows and rejected by Unix `open(2)` with a
+    // less-than-obvious `EINVAL`. Catch them here with a clear message instead.
+    if trimmed.contains('\0') {
+        bail!("refusing to materialize artifact with NUL byte in filename: `{raw}`");
+    }
     Ok(trimmed)
 }
 
@@ -686,6 +656,23 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
 /// would silently 404 and the user would have no way to tell what happened.
 const PYPI_FILE_HOST: &str = "files.pythonhosted.org";
 
+/// Returns `true` when `url` points at PyPI itself (and not a mirror clone of it).
+///
+/// The canonical built-in is already tagged as [`IndexUrl::Pypi`] by the parser, but that
+/// tag is applied only when the user-supplied URL matches the `PYPI_URL` constant byte-for-byte.
+/// So `https://pypi.org/simple/` (with trailing slash) — or any equivalent variant — is
+/// classified as a generic `IndexUrl::Url`, and would then be treated as a mirror by
+/// [`rewrite_registry_url`], silently rewriting PyPI artifact URLs to the invalid
+/// `https://pypi.org/packages/...`. Checking the host explicitly catches these variants.
+fn is_pypi_default(url: &IndexUrl) -> bool {
+    if matches!(url, IndexUrl::Pypi(_)) {
+        return true;
+    }
+    let raw = url.url();
+    raw.host_str() == Some("pypi.org")
+        && raw.path().trim_end_matches('/') == "/simple"
+}
+
 /// Rewrite a PyPI-hosted Registry artifact URL to point at a user-specified mirror.
 ///
 /// Called only by `uv download`, and only in memory — the `uv.lock` file on disk is never
@@ -695,6 +682,12 @@ const PYPI_FILE_HOST: &str = "files.pythonhosted.org";
 ///   2. the original URL's host is [`PYPI_FILE_HOST`], and
 ///   3. the original URL's path contains `/packages/` (the standard layout shared by PyPI
 ///      and its bandersnatch-style mirrors — Tsinghua, USTC, Aliyun).
+///
+/// `mirror_base` is the URL of the mirror **root**, without the trailing `simple` segment
+/// of the simple-index URL. It is typically obtained by calling `IndexUrl::root()` on the
+/// user-provided `--default-index` — that method strips the `simple` / `+simple` tail for
+/// us, so e.g. `https://mirrors.ustc.edu.cn/pypi/simple/` becomes
+/// `https://mirrors.ustc.edu.cn/pypi` before reaching this function.
 ///
 /// The resulting URL is `{mirror_base}/packages/...` with the original query and fragment
 /// preserved so per-file hash fragments (`#sha256=...`) continue to round-trip. The SHA-256
@@ -726,10 +719,64 @@ fn rewrite_registry_url(
     rewritten
 }
 
+/// Verify an already-materialized file against the lockfile hashes.
+///
+/// Read in 64 KiB chunks so large artifacts don't blow the stack;
+/// fail loudly on mismatch instead of silently overwriting, because the file may
+/// have been dropped there deliberately (e.g. a pinned build under audit).
+///
+/// If `expected_hashes` is empty we have no authoritative digest to check against
+/// (rare: direct URL with no lock-level hashes); we trust the caller-supplied file
+/// and keep the original "already existed" short-circuit.
+fn verify_existing_file(path: &Path, expected_hashes: &[HashDigest]) -> Result<()> {
+    if expected_hashes.is_empty() {
+        return Ok(());
+    }
+    let mut hashers: Vec<Hasher> = expected_hashes
+        .iter()
+        .map(|h| Hasher::from(h.algorithm))
+        .collect();
+    let mut file = fs_err::File::open(path)
+        .map_err(|err| anyhow::anyhow!("failed to open `{}`: {err}", path.display()))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buf)
+            .map_err(|err| anyhow::anyhow!("failed to read `{}`: {err}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        for hasher in &mut hashers {
+            hasher.update(&buf[..read]);
+        }
+    }
+    for (hasher, expected) in hashers.into_iter().zip(expected_hashes.iter()) {
+        let actual: HashDigest = hasher.into();
+        if actual.digest != expected.digest {
+            bail!(
+                "hash mismatch for existing file `{}`:\n  expected {}: {}\n  actual   {}: {}\n\
+                 Remove the file to force re-download.",
+                path.display(),
+                expected.algorithm,
+                expected.digest,
+                actual.algorithm,
+                actual.digest,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Hard-link or copy a local path artifact into the output directory.
-fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
+fn copy_or_link(
+    src: &Path,
+    dst: &Path,
+    expected_hashes: &[HashDigest],
+) -> Result<MaterializeOutcome> {
     match fs_err::symlink_metadata(dst) {
-        Ok(metadata) if metadata.is_file() => return Ok(MaterializeOutcome::AlreadyExisted),
+        Ok(metadata) if metadata.is_file() => {
+            verify_existing_file(dst, expected_hashes)?;
+            return Ok(MaterializeOutcome::AlreadyExisted);
+        }
         Ok(_) => bail!(
             "refusing to overwrite non-file entry at `{}`",
             dst.display()
@@ -761,11 +808,21 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
 
 #[cfg(test)]
 mod tests {
-    use super::{rewrite_registry_url, sanitize_artifact_filename};
+    use super::{is_pypi_default, rewrite_registry_url, sanitize_artifact_filename, verify_existing_file};
+    use std::io::Write;
+    use uv_distribution_types::IndexUrl;
+    use uv_extract::hash::Hasher;
+    use uv_pypi_types::{HashAlgorithm, HashDigest};
     use uv_redacted::DisplaySafeUrl;
 
     fn url(s: &str) -> DisplaySafeUrl {
         DisplaySafeUrl::parse(s).unwrap()
+    }
+
+    fn sha256_of(bytes: &[u8]) -> HashDigest {
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(bytes);
+        hasher.into()
     }
 
     #[test]
@@ -895,5 +952,71 @@ mod tests {
         assert!(sanitize_artifact_filename("   ").is_err());
         assert!(sanitize_artifact_filename(".").is_err());
         assert!(sanitize_artifact_filename("..").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_nul_byte() {
+        assert!(sanitize_artifact_filename("foo\0.whl").is_err());
+        assert!(sanitize_artifact_filename("\0").is_err());
+    }
+
+    #[test]
+    fn verify_existing_file_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact");
+        let bytes = b"some artifact bytes";
+        fs_err::File::create(&path)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+        let expected = [sha256_of(bytes)];
+        verify_existing_file(&path, &expected).expect("hash should match");
+    }
+
+    #[test]
+    fn verify_existing_file_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact");
+        fs_err::File::create(&path)
+            .unwrap()
+            .write_all(b"actual")
+            .unwrap();
+        let expected = [sha256_of(b"different")];
+        let err = verify_existing_file(&path, &expected).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("hash mismatch"),
+            "message should mention hash mismatch: {message}"
+        );
+    }
+
+    #[test]
+    fn verify_existing_file_without_hashes_is_trusted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact");
+        fs_err::File::create(&path)
+            .unwrap()
+            .write_all(b"x")
+            .unwrap();
+        verify_existing_file(&path, &[]).expect("no hashes means trust the file");
+    }
+
+    #[test]
+    fn is_pypi_default_accepts_trailing_slash() {
+        // Typical case — the built-in Pypi variant.
+        let index = IndexUrl::parse("https://pypi.org/simple", None).unwrap();
+        assert!(is_pypi_default(&index));
+        // The variant that previously escaped the matches! arm and was rewritten
+        // to https://pypi.org/packages/... (invalid).
+        let index = IndexUrl::parse("https://pypi.org/simple/", None).unwrap();
+        assert!(is_pypi_default(&index));
+    }
+
+    #[test]
+    fn is_pypi_default_rejects_mirrors() {
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple/", None).unwrap();
+        assert!(!is_pypi_default(&index));
+        let index = IndexUrl::parse("https://pypi.tuna.tsinghua.edu.cn/simple", None).unwrap();
+        assert!(!is_pypi_default(&index));
     }
 }

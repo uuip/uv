@@ -25,16 +25,14 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
-use uv_pep508::{MarkerTree, VersionOrUrl};
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ParsedArchiveUrl, ParsedGitUrl, ParsedUrl};
 use uv_python::{PythonDownloads, PythonEnvironment, PythonPreference, PythonRequest};
 use uv_resolver::{FlatIndex, ForkStrategy, Installable, Lock, PrereleaseMode, ResolutionMode};
 use uv_scripts::Pep723Script;
 use uv_settings::PythonInstallMirrors;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
-use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
@@ -47,7 +45,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentUpdate, PlatformState, ProjectEnvironment, ProjectError, ScriptEnvironment,
     UniversalState, default_dependency_groups, detect_conflicts, script_extra_build_requires,
-    script_specification, update_environment,
+    script_specification, store_credentials_from_target, update_environment,
 };
 use crate::commands::{ExitStatus, diagnostics};
 use crate::printer::Printer;
@@ -963,53 +961,6 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 
         !dist.r#virtual.unwrap_or(false)
     })
-}
-
-/// Extract any credentials that are defined on the workspace dependencies themselves. While we
-/// don't store plaintext credentials in the `uv.lock`, we do respect credentials that are defined
-/// in the `pyproject.toml`.
-///
-/// These credentials can come from any of `tool.uv.sources`, `tool.uv.dev-dependencies`,
-/// `project.dependencies`, and `project.optional-dependencies`.
-fn store_credentials_from_target(target: InstallTarget<'_>, client_builder: &BaseClientBuilder) {
-    // Iterate over any indexes in the target.
-    for index in target.indexes() {
-        if let Some(credentials) = index.credentials() {
-            if let Some(root_url) = index.root_url() {
-                client_builder.store_credentials(&root_url, credentials.clone());
-            }
-            client_builder.store_credentials(index.raw_url(), credentials);
-        }
-    }
-
-    // Iterate over any sources in the target.
-    for source in target.sources() {
-        match source {
-            Source::Git { git, .. } => {
-                uv_git::store_credentials_from_url(git);
-            }
-            Source::Url { url, .. } => {
-                client_builder.store_credentials_from_url(url);
-            }
-            _ => {}
-        }
-    }
-
-    // Iterate over any dependencies defined in the target.
-    for requirement in target.requirements() {
-        let Some(VersionOrUrl::Url(url)) = &requirement.version_or_url else {
-            continue;
-        };
-        match &url.parsed_url {
-            ParsedUrl::Git(ParsedGitUrl { url, .. }) => {
-                uv_git::store_credentials_from_url(url.url());
-            }
-            ParsedUrl::Archive(ParsedArchiveUrl { url, .. }) => {
-                client_builder.store_credentials_from_url(url);
-            }
-            _ => {}
-        }
-    }
 }
 
 #[derive(Debug, Serialize)]
