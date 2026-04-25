@@ -779,7 +779,7 @@ impl DownloadProjectReporter {
                     "{wide_msg:.cyan}\n  {wide_bar:.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}",
                 )
                 .unwrap()
-                .progress_chars("━━─"),
+                .progress_chars("--"),
             );
             if multi.multi_progress.is_hidden()
                 && !*HAS_UV_TEST_NO_CLI_PROGRESS
