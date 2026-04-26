@@ -776,7 +776,7 @@ impl DownloadProjectReporter {
             // so narrow terminals (<60 col) don't re-wrap the bar onto a third line.
             progress.set_style(
                 ProgressStyle::with_template(
-                    "{wide_msg:.cyan}\n  {wide_bar:.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}",
+                    "{wide_msg:.cyan}\n  {wide_bar:.green/dim} {binary_bytes:>10}/{binary_total_bytes:10}  ",
                 )
                 .unwrap()
                 .progress_chars("--"),

@@ -1159,7 +1159,11 @@ pub enum ProjectCommand {
     /// virtual workspace roots are silently omitted; other workspace members,
     /// local path, editable, and git dependencies are skipped with a warning.
     #[command(
-        after_help = "Use `uv help download` for more details.",
+        after_help = "\
+Example:
+  $ uv download --platform linux --machine aarch64 -o pkgs --default-index https://mirrors.ustc.edu.cn/pypi/simple/ -p 3.10
+
+Use `uv help download` for more details.",
         after_long_help = ""
     )]
     Download(Box<DownloadArgs>),
