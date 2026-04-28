@@ -29,6 +29,10 @@ pub use requirements_input::*;
 pub use resolution_mode::*;
 pub use sources::*;
 pub use target_triple::*;
+
+mod platform_spec;
+
+pub use platform_spec::{parse_glibc, parse_machine, PlatformOs, PyImpl};
 pub use trusted_host::*;
 pub use trusted_publishing::*;
 pub use vcs::*;
