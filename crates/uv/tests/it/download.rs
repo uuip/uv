@@ -3,6 +3,7 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
 
+use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -52,6 +53,72 @@ fn download_basic_native_platform() -> Result<()> {
 
     // No venv should have been created under the project.
     assert!(!context.temp_dir.child(".venv").exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn download_reports_starting_downloads() -> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    let server = MockServer::start().await;
+
+    let wheel_bytes = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    let wheel_sha = {
+        let mut hasher = Sha256::new();
+        hasher.update(&wheel_bytes);
+        format!("{:x}", hasher.finalize())
+    };
+
+    let wheel_url = format!(
+        "{}/files/basic_package-0.1.0-py3-none-any.whl",
+        server.uri()
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/files/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel_bytes))
+        .mount(&server)
+        .await;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&format!(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {wheel_url}#sha256={wheel_sha}"]
+        "#,
+    ))?;
+
+    let out = context.temp_dir.child("pkgs");
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .env_remove(EnvVars::UV_TEST_NO_CLI_PROGRESS)
+            .arg("-o")
+            .arg(out.path()),
+        @r"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+
+        ----- stderr -----
+        Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+        Resolved 2 packages in [TIME]
+        Starting downloads...
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
+    );
 
     Ok(())
 }

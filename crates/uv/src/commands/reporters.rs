@@ -730,6 +730,7 @@ struct DownloadMulti {
 struct DownloadBarState {
     bars: FxHashMap<usize, ProgressBar>,
     next_id: usize,
+    starting: Option<ProgressBar>,
 }
 
 impl DownloadProjectReporter {
@@ -750,9 +751,8 @@ impl DownloadProjectReporter {
         Self { printer, multi }
     }
 
-    /// Open a byte-level bar for a single artifact download; call on HTTP 200 once
-    /// `content_length` is known.
-    pub(crate) fn on_download_start(&self, name: String, size: Option<u64>) -> usize {
+    /// Register a single artifact as soon as its download task begins.
+    pub(crate) fn on_download_start(&self) -> usize {
         let Some(multi) = self.multi.as_ref() else {
             return 0;
         };
@@ -760,6 +760,37 @@ impl DownloadProjectReporter {
         let mut state = multi.state.lock().unwrap();
         state.next_id += 1;
         let id = state.next_id;
+
+        if state.starting.is_none() {
+            if multi.multi_progress.is_hidden() && !*HAS_UV_TEST_NO_CLI_PROGRESS {
+                let _ = writeln!(self.printer.stderr(), "Starting downloads...");
+            }
+
+            let progress = multi
+                .multi_progress
+                .add(ProgressBar::with_draw_target(None, self.printer.target()));
+            progress.set_style(
+                ProgressStyle::with_template("{spinner:.green} {wide_msg:.dim}")
+                    .unwrap()
+                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+            );
+            progress.enable_steady_tick(Duration::from_millis(100));
+            progress.set_message("Starting downloads...");
+            state.starting = Some(progress);
+        }
+        id
+    }
+
+    /// Open a byte-level progress bar once the server responds. If the server omits
+    /// `Content-Length`, use a spinner for that artifact.
+    pub(crate) fn on_download_response(&self, id: usize, name: String, size: Option<u64>) {
+        let Some(multi) = self.multi.as_ref() else {
+            return;
+        };
+
+        if let Some(progress) = multi.state.lock().unwrap().starting.take() {
+            progress.finish_and_clear();
+        }
 
         let progress = multi
             .multi_progress
@@ -821,8 +852,7 @@ impl DownloadProjectReporter {
             progress.set_message(name);
         }
 
-        state.bars.insert(id, progress);
-        id
+        multi.state.lock().unwrap().bars.insert(id, progress);
     }
 
     pub(crate) fn on_download_progress(&self, id: usize, bytes: u64) {
@@ -856,10 +886,16 @@ impl DownloadProjectReporter {
     /// Draining here guarantees the terminal is clean regardless of success or early abort.
     pub(crate) fn on_complete(&self) {
         if let Some(multi) = self.multi.as_ref() {
-            let orphans: Vec<_> = {
+            let (starting, orphans): (_, Vec<_>) = {
                 let mut state = multi.state.lock().unwrap();
-                state.bars.drain().map(|(_, bar)| bar).collect()
+                (
+                    state.starting.take(),
+                    state.bars.drain().map(|(_, bar)| bar).collect(),
+                )
             };
+            if let Some(progress) = starting {
+                progress.finish_and_clear();
+            }
             for bar in orphans {
                 bar.finish_and_clear();
             }

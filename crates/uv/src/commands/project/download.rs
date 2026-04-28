@@ -478,7 +478,20 @@ fn spawn_download(
             .acquire_owned()
             .await
             .map_err(|_| anyhow::anyhow!("downloads semaphore was unexpectedly closed"))?;
-        let outcome = download_to(&client, &reporter, name, url, &dst, &expected).await?;
+        if let Some(outcome) = existing_download_outcome(&dst)? {
+            return Ok(outcome);
+        }
+        let progress_id = reporter.on_download_start();
+        let outcome = download_to(
+            &client,
+            &reporter,
+            progress_id,
+            name,
+            url,
+            &dst,
+            &expected,
+        )
+        .await?;
         Ok(outcome)
     });
 }
@@ -516,33 +529,12 @@ impl Drop for PartialFile {
 async fn download_to(
     client: &RegistryClient,
     reporter: &DownloadProjectReporter,
+    progress_id: usize,
     name: String,
     url: DisplaySafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
 ) -> Result<MaterializeOutcome> {
-    // Only treat an existing regular file as already-materialized. Directories,
-    // symlinks, or other exotica are an error so we don't silently skip them.
-    // The atomic partial→rename pattern below guarantees `dst` is whole and
-    // already passed hash verification on its initial download — re-hashing on
-    // every rerun is pure I/O cost for no information gain.
-    match fs_err::symlink_metadata(dst) {
-        Ok(metadata) if metadata.is_file() => {
-            return Ok(MaterializeOutcome::AlreadyExisted);
-        }
-        Ok(_) => bail!(
-            "refusing to overwrite non-file entry at `{}`",
-            dst.display()
-        ),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(anyhow::anyhow!(
-                "failed to stat `{}`: {err}",
-                dst.display()
-            ));
-        }
-    }
-
     let partial = PartialFile(
         dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())),
     );
@@ -560,9 +552,9 @@ async fn download_to(
     }
 
     // Open the per-artifact progress bar once the server commits to a `Content-Length`
-    // (missing for chunked/compressed responses — the bar then falls back to a spinner).
+    // (missing for chunked/compressed responses leaves a spinner).
     let size = response.content_length();
-    let progress_id = reporter.on_download_start(name, size);
+    reporter.on_download_response(progress_id, name, size);
 
     let mut hashers: Vec<Hasher> = expected_hashes
         .iter()
@@ -613,6 +605,25 @@ async fn download_to(
     reporter.on_download_complete(progress_id);
 
     Ok(MaterializeOutcome::Written)
+}
+
+/// Return an existing artifact outcome before creating any download progress.
+///
+/// Only a regular file counts as already materialized. Directories, symlinks, or
+/// other entries are errors so we don't silently skip an invalid destination.
+fn existing_download_outcome(dst: &Path) -> Result<Option<MaterializeOutcome>> {
+    match fs_err::symlink_metadata(dst) {
+        Ok(metadata) if metadata.is_file() => Ok(Some(MaterializeOutcome::AlreadyExisted)),
+        Ok(_) => bail!(
+            "refusing to overwrite non-file entry at `{}`",
+            dst.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(anyhow::anyhow!(
+            "failed to stat `{}`: {err}",
+            dst.display()
+        )),
+    }
 }
 
 /// Accept an artifact filename only if it is a single harmless path segment.
