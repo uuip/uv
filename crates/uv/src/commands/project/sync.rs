@@ -30,7 +30,6 @@ use uv_lock::{Installable, Lock, PythonReport};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
-use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python::{
     ConfigDiscovery, PythonDownloads, PythonEnvironment, PythonPreference, PythonRequest,
 };

@@ -17,9 +17,9 @@ use uv_cache::CacheArgs;
 use uv_configuration::RequirementsInput;
 use uv_configuration::{
     AnnotationStyle, ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy,
-    KeyringProviderType, PackageNameSpecifier, PipCompileFormat, PrereleaseMode,
-    PrereleasePackageEntry, PlatformOs, ProjectBuildBackend, PyImpl, ResolutionMode, TargetTriple,
-    TrustedHost, TrustedPublishing, VersionControlSystem,
+    KeyringProviderType, PackageNameSpecifier, PipCompileFormat, PlatformOs, PrereleaseMode,
+    PrereleasePackageEntry, ProjectBuildBackend, PyImpl, ResolutionMode, TargetTriple, TrustedHost,
+    TrustedPublishing, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
