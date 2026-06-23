@@ -287,6 +287,7 @@ tracing-tree = { version = "0.4.0" }
 unicode-width = { version = "0.2.0" }
 unscanny = { version = "0.1.0" }
 url = { version = "2.5.2", features = ["serde"] }
+uuid = { version = "1.24.0", features = ["v4"] }
 version-ranges = { version = "0.2.2", package = "astral-version-ranges" }
 walkdir = { version = "2.5.0" }
 webpki-root-certs = { version = "1" }

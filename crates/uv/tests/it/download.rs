@@ -24,10 +24,7 @@ fn download_basic_native_platform() -> Result<()> {
     let out = context.temp_dir.child("pkgs");
 
     uv_snapshot!(context.filters(), context.download().arg("-o").arg(out.path()), @r"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 2 packages in [TIME]
@@ -73,7 +70,7 @@ async fn download_reports_starting_downloads() -> Result<()> {
     let wheel_sha = {
         let mut hasher = Sha256::new();
         hasher.update(&wheel_bytes);
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     };
 
     let wheel_url = format!(
@@ -108,10 +105,7 @@ async fn download_reports_starting_downloads() -> Result<()> {
             .arg("-o")
             .arg(out.path()),
         @r"
-        success: true
-        exit_code: 0
-        ----- stdout -----
-
+        exit_code: 0 (success)
         ----- stderr -----
         Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
         Resolved 2 packages in [TIME]
@@ -147,10 +141,7 @@ fn download_glibc_on_non_linux_errors() -> Result<()> {
             .arg("-o")
             .arg(context.temp_dir.child("out").path()),
         @r"
-        success: false
-        exit_code: 2
-        ----- stdout -----
-
+        exit_code: 2 (failure)
         ----- stderr -----
         error: --glibc is only valid with --platform=linux
         "
@@ -180,10 +171,7 @@ fn download_implementation_non_cpython_errors() -> Result<()> {
             .arg("-o")
             .arg(context.temp_dir.child("out").path()),
         @r"
-        success: false
-        exit_code: 2
-        ----- stdout -----
-
+        exit_code: 2 (failure)
         ----- stderr -----
         error: invalid value 'PyPy' for '--implementation <IMPLEMENTATION>': unsupported Python implementation `pypy`; only `CPython` is supported
 
@@ -263,10 +251,7 @@ fn download_reruns_are_idempotent() -> Result<()> {
         context.filters(),
         context.download().arg("-o").arg(out.path()),
         @r"
-        success: true
-        exit_code: 0
-        ----- stdout -----
-
+        exit_code: 0 (success)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Resolved 2 packages in [TIME]
@@ -375,14 +360,11 @@ fn download_locked_fails_on_mismatch() -> Result<()> {
             .arg("--locked")
             .arg("-o").arg(context.temp_dir.child("out").path()),
         @r"
-        success: false
-        exit_code: 1
-        ----- stdout -----
-
+        exit_code: 1 (failure)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Resolved 2 packages in [TIME]
-        The lockfile at `uv.lock` needs to be updated, but `--locked` was provided. To update the lockfile, run `uv lock`.
+        The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
         "
     );
     Ok(())
@@ -414,10 +396,7 @@ fn download_platform_not_in_environments() -> Result<()> {
             .arg("--machine").arg("aarch64")
             .arg("-o").arg(context.temp_dir.child("out").path()),
         @r"
-        success: false
-        exit_code: 2
-        ----- stdout -----
-
+        exit_code: 2 (failure)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Resolved 2 packages in [TIME]
@@ -458,7 +437,9 @@ fn download_wheel_hash_matches_lockfile() -> Result<()> {
                 .nth(1)
                 .and_then(|tail| tail.split('"').next().map(str::to_owned))
         })
-        .ok_or_else(|| anyhow::anyhow!("failed to find wheel sha256 in uv.lock:\n{lock_contents}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("failed to find wheel sha256 in uv.lock:\n{lock_contents}")
+        })?;
 
     // Find the iniconfig wheel in out-dir and hash it.
     let wheel = fs_err::read_dir(out.path())?
@@ -479,9 +460,12 @@ fn download_wheel_hash_matches_lockfile() -> Result<()> {
     let bytes = fs_err::read(&wheel)?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
 
-    assert_eq!(actual, recorded_sha, "downloaded wheel sha must match uv.lock");
+    assert_eq!(
+        actual, recorded_sha,
+        "downloaded wheel sha must match uv.lock"
+    );
     Ok(())
 }
 
@@ -557,7 +541,7 @@ async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
     let wheel_sha = {
         let mut hasher = Sha256::new();
         hasher.update(&wheel_bytes);
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     };
 
     let wheel_url = format!(
@@ -571,15 +555,18 @@ async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
         .mount(&server)
         .await;
 
-    context.temp_dir.child("pyproject.toml").write_str(&format!(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.13"
         dependencies = ["basic-package @ {wheel_url}#sha256={wheel_sha}"]
         "#,
-    ))?;
+        ))?;
 
     let out = context.temp_dir.child("pkgs");
     context
@@ -602,7 +589,7 @@ async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
     let bytes = fs_err::read(&wheel)?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
 
     assert_eq!(
         actual, wheel_sha,
@@ -647,10 +634,7 @@ fn download_default_index_local_path_warns() -> Result<()> {
             .arg(&fake_index_url)
             .arg("-o").arg(out.path()),
         @r"
-        success: true
-        exit_code: 0
-        ----- stdout -----
-
+        exit_code: 0 (success)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         warning: `--default-index` points at a local path; `uv download` cannot rewrite recorded artifact URLs to a filesystem index and will use the URLs in `uv.lock` as-is
@@ -709,10 +693,7 @@ fn download_trusts_existing_wheel_without_rehashing() -> Result<()> {
         context.filters(),
         context.download().arg("--frozen").arg("-o").arg(out.path()),
         @r"
-        success: true
-        exit_code: 0
-        ----- stdout -----
-
+        exit_code: 0 (success)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Downloaded 0 packages (1 already existed) to [TEMP_DIR]/pkgs
@@ -853,10 +834,7 @@ fn download_default_index_non_simple_url_warns() -> Result<()> {
             .arg("https://example.invalid/pypi/not-ending-in-simple")
             .arg("-o").arg(out.path()),
         @r"
-        success: true
-        exit_code: 0
-        ----- stdout -----
-
+        exit_code: 0 (success)
         ----- stderr -----
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         warning: `--default-index` was provided but its URL does not end in `simple` / `+simple`; `uv download` does not know how to derive a mirror file base and will use the URLs in `uv.lock` as-is
@@ -910,5 +888,44 @@ fn download_default_index_trailing_slash_does_not_force_resolve() -> Result<()> 
         .arg(out.path())
         .assert()
         .success();
+    Ok(())
+}
+
+#[test]
+fn download_locked_accepts_default_index_as_artifact_mirror() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+    let lock_before = fs_err::read(context.temp_dir.child("uv.lock").path())?;
+
+    // Use an unreachable mirror with an already materialized artifact. Success proves
+    // the mirror does not invalidate the PyPI lock; URL rewrite behavior is covered by
+    // the unit tests in `commands::project::download`.
+    context
+        .download()
+        .arg("--locked")
+        .env(EnvVars::UV_DEFAULT_INDEX, "https://example.invalid/simple")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let lock_after = fs_err::read(context.temp_dir.child("uv.lock").path())?;
+    assert_eq!(lock_after, lock_before, "--locked modified uv.lock");
     Ok(())
 }

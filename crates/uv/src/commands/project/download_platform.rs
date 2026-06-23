@@ -28,11 +28,7 @@ pub(crate) enum PlatformSpecError {
         "glibc {major}.{minor} is not supported for {arch} \
          (supported manylinux tags: 2.17, 2.28, 2.31–2.40)"
     )]
-    UnsupportedGlibc {
-        arch: Arch,
-        major: u16,
-        minor: u16,
-    },
+    UnsupportedGlibc { arch: Arch, major: u16, minor: u16 },
 }
 
 impl PlatformSpec {
@@ -69,19 +65,14 @@ impl PlatformSpec {
         use Arch::{Aarch64, Riscv64, X86, X86_64};
         use PlatformOs::{Linux, Macos, Windows};
         match (self.os, self.arch, self.glibc) {
-            (Linux, arch @ (X86_64 | Aarch64), Some((2, minor))) => {
-                linux_manylinux(arch, minor).ok_or(PlatformSpecError::UnsupportedGlibc {
+            (Linux, arch @ (X86_64 | Aarch64), Some((2, minor))) => linux_manylinux(arch, minor)
+                .ok_or(PlatformSpecError::UnsupportedGlibc {
                     arch,
                     major: 2,
                     minor,
-                })
-            }
+                }),
             (Linux, arch @ (X86_64 | Aarch64), Some((major, minor))) => {
-                Err(PlatformSpecError::UnsupportedGlibc {
-                    arch,
-                    major,
-                    minor,
-                })
+                Err(PlatformSpecError::UnsupportedGlibc { arch, major, minor })
             }
             (Linux, Riscv64, _) => Ok(TargetTriple::Riscv64UnknownLinuxGnu),
             (Windows, X86_64, None) => Ok(TargetTriple::X8664PcWindowsMsvc),
@@ -186,7 +177,10 @@ mod tests {
             glibc: Some((2, 28)),
             implementation: PyImpl::CPython,
         };
-        assert_eq!(spec.to_target_triple(), Ok(TargetTriple::Aarch64Manylinux228));
+        assert_eq!(
+            spec.to_target_triple(),
+            Ok(TargetTriple::Aarch64Manylinux228)
+        );
     }
 
     #[test]
@@ -268,7 +262,11 @@ mod tests {
         };
         assert!(matches!(
             spec.to_target_triple(),
-            Err(PlatformSpecError::UnsupportedGlibc { major: 3, minor: 0, .. })
+            Err(PlatformSpecError::UnsupportedGlibc {
+                major: 3,
+                minor: 0,
+                ..
+            })
         ));
     }
 

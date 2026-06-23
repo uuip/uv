@@ -643,7 +643,7 @@ pub(crate) async fn check(
                     &base_interpreter,
                     &settings.resolver.build_options,
                 )?;
-                project::sync::store_credentials_from_target(target, &client_builder)?;
+                project::store_credentials_from_target(target, &client_builder)?;
                 let ty_state = state.fork();
                 let environment = match CachedEnvironment::from_locked_resolution(
                     &resolution,

@@ -2980,13 +2980,13 @@ async fn run_project(
         }
         ProjectCommand::Download(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::DownloadSettings::resolve(*args, filesystem, environment);
+            let args = settings::DownloadSettings::resolve(*args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
             globals
                 .network_settings
-                .check_refresh_conflict(&args.refresh);
+                .check_refresh_conflict(&args.refresh)?;
 
             // Initialize the cache.
             let cache = cache.init().await?.with_refresh(args.refresh);
@@ -3009,7 +3009,7 @@ async fn run_project(
                 args.settings,
                 client_builder.subcommand(vec!["download".to_owned()]),
                 globals.concurrency,
-                no_config,
+                config_discovery,
                 &cache,
                 workspace_cache,
                 printer,
