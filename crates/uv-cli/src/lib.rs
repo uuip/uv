@@ -15,12 +15,12 @@ use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::RequirementsInput;
 use uv_configuration::{
-    PlatformOs, PyImpl, AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
+    AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
     ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
-    ListFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
-    PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode, SyncFormat,
-    TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
-    VersionControlSystem, VersionFormat,
+    ListFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PlatformOs,
+    PrereleaseMode, PrereleasePackageEntry, ProjectBuildBackend, PyImpl, PythonListFormat,
+    ResolutionMode, SyncFormat, TargetTriple, TreeFormat, TrustedHost, TrustedPublishing,
+    VersionBump, VersionBumpSpec, VersionControlSystem, VersionFormat,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,

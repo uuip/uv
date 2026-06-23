@@ -17,7 +17,6 @@ use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    PlatformOs, PyImpl,
     ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
@@ -36,7 +35,6 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_platform_tags::Arch;
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
@@ -57,7 +55,7 @@ use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDe
 
 use crate::comma::CommaSeparatedRequirements;
 use crate::{
-    DownloadArgs, AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
+    AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
     AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, ExternalCommand, GlobalArgs, InitArgs,
     ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs,
     PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
@@ -76,6 +74,9 @@ use crate::{
         resolver_installer_options, resolver_options, upgrade_options,
     },
 };
+
+mod download;
+pub use download::DownloadSettings;
 
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
@@ -2007,170 +2008,6 @@ impl SyncSettings {
                 .combine(filesystem_install_mirrors),
             malware_settings,
         })
-    }
-}
-
-/// The resolved settings to use for a `download` invocation.
-#[derive(Debug, Clone)]
-pub(crate) struct DownloadSettings {
-    pub(crate) lock_check: LockCheck,
-    pub(crate) frozen: Option<FrozenSource>,
-    pub(crate) extras: ExtrasSpecification,
-    pub(crate) groups: DependencyGroups,
-    pub(crate) output_dir: PathBuf,
-    pub(crate) platform: PlatformOs,
-    pub(crate) machine: Arch,
-    pub(crate) glibc: Option<(u16, u16)>,
-    pub(crate) implementation: PyImpl,
-    pub(crate) python: Option<String>,
-    pub(crate) install_mirrors: PythonInstallMirrors,
-    pub(crate) settings: ResolverSettings,
-    pub(crate) refresh: Refresh,
-}
-
-impl DownloadSettings {
-    /// Resolve the [`DownloadSettings`] from the CLI and filesystem configuration.
-    pub(crate) fn resolve(
-        args: DownloadArgs,
-        filesystem: Option<FilesystemOptions>,
-        environment: EnvironmentOptions,
-    ) -> anyhow::Result<Self> {
-        let DownloadArgs {
-            extra,
-            all_extras,
-            no_extra,
-            no_all_extras,
-            dev,
-            no_dev,
-            only_dev,
-            group,
-            no_group,
-            no_default_groups,
-            only_group,
-            all_groups,
-            locked,
-            frozen,
-            resolver,
-            build,
-            refresh,
-            python,
-            platform,
-            machine,
-            glibc,
-            implementation,
-            output_dir,
-        } = args;
-
-        let filesystem_install_mirrors = filesystem
-            .clone()
-            .map(|fs| fs.install_mirrors.clone())
-            .unwrap_or_default();
-
-        let settings = ResolverSettings::resolve(resolver, build, filesystem, &environment)?;
-
-        // Resolve flags from CLI and environment variables.
-        let locked = resolve_flag(locked, "locked", environment.locked);
-        let frozen = resolve_flag(frozen, "frozen", environment.frozen);
-
-        // Check for conflicts between locked and frozen.
-        check_conflicts(locked, frozen)?;
-
-        let (dev, no_dev) = resolve_flag_pair(
-            dev,
-            no_dev,
-            "dev",
-            "no-dev",
-            Some(environment.dev),
-            Some(environment.no_dev),
-        );
-
-        Ok(Self {
-            lock_check: resolve_lock_check(locked),
-            frozen: resolve_frozen(frozen),
-            extras: ExtrasSpecification::from_args(
-                extra.unwrap_or_default(),
-                no_extra,
-                false,
-                vec![],
-                flag(all_extras, no_all_extras, "all-extras")?.unwrap_or_default(),
-            ),
-            groups: DependencyGroups::from_args(
-                DevMode::from_args(dev.into(), no_dev.into(), only_dev),
-                group,
-                if no_group.is_empty() {
-                    environment.no_group.clone().unwrap_or_default()
-                } else {
-                    no_group
-                },
-                no_default_groups,
-                only_group,
-                all_groups,
-            ),
-            output_dir,
-            platform: platform.unwrap_or_else(host_platform_os),
-            machine: machine.unwrap_or_else(host_platform_machine),
-            glibc,
-            implementation,
-            python: python.and_then(Maybe::into_option),
-            refresh: Refresh::try_from(refresh)?,
-            settings,
-            install_mirrors: environment
-                .install_mirrors
-                .combine(filesystem_install_mirrors),
-        })
-    }
-}
-
-fn host_platform_os() -> PlatformOs {
-    #[cfg(target_os = "linux")]
-    {
-        PlatformOs::Linux
-    }
-    #[cfg(target_os = "windows")]
-    {
-        PlatformOs::Windows
-    }
-    #[cfg(target_os = "macos")]
-    {
-        PlatformOs::Macos
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-    {
-        compile_error!(
-            "uv download: host target_os must be one of `linux`, `windows`, `macos`; \
-             the download command needs a host-platform default for `--platform`."
-        )
-    }
-}
-
-fn host_platform_machine() -> Arch {
-    #[cfg(target_arch = "x86_64")]
-    {
-        Arch::X86_64
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Arch::Aarch64
-    }
-    #[cfg(target_arch = "x86")]
-    {
-        Arch::X86
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        Arch::Riscv64
-    }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "x86",
-        target_arch = "riscv64"
-    )))]
-    {
-        compile_error!(
-            "uv download: host target_arch must be one of `x86_64`, `aarch64`, `x86`, `riscv64`; \
-             the download command needs a host-machine default for `--machine`."
-        )
     }
 }
 

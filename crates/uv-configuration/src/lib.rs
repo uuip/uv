@@ -39,7 +39,7 @@ pub use tool_run::*;
 
 mod platform_spec;
 
-pub use platform_spec::{parse_glibc, parse_machine, PlatformOs, PyImpl};
+pub use platform_spec::{PlatformOs, PyImpl, parse_glibc, parse_machine};
 pub use trusted_host::*;
 pub use trusted_publishing::*;
 pub use vcs::*;

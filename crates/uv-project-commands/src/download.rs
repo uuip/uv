@@ -14,39 +14,42 @@ use uuid::Uuid;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, ExtrasSpecification,
-    InstallOptions, PlatformOs, PyImpl, TargetTriple,
+    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
+    ExtrasSpecification, InstallOptions, PlatformOs, PyImpl, TargetTriple,
 };
 use uv_distribution_types::{
-    BuiltDist, Dist, Index, IndexLocations, IndexUrl, RemoteSource, ResolvedDist, SourceDist,
+    BuiltDist, Dist, Index, IndexLocations, IndexUrl, Origin, RemoteSource, ResolvedDist,
+    SourceDist,
 };
-use uv_pep508::VerbatimUrl;
 use uv_extract::hash::Hasher;
+use uv_lock::Lock;
 use uv_normalize::DefaultExtras;
+use uv_pep508::VerbatimUrl;
 use uv_platform_tags::Arch;
 use uv_preview::Preview;
 use uv_pypi_types::HashDigest;
-use uv_python::{PythonDownloads, PythonPreference, PythonRequest};
-use uv_redacted::DisplaySafeUrl;
-use uv_resolver::{Installable, Lock};
+use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest};
+use uv_python_types::{PythonDownloads, PythonPreference, PythonRequest};
+use uv_redacted::SafeUrl;
+use uv_redacted::policy::Stripped;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
-use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::{resolution_markers, resolution_tags};
-use crate::commands::project::download_platform::PlatformSpec;
-use crate::commands::project::install_target::InstallTarget;
-use crate::commands::project::lock::{LockMode, LockOperation};
-use crate::commands::project::lock_target::LockTarget;
-use crate::commands::project::{
-    ProjectEnvironmentPolicy, ProjectError, ProjectInterpreter, UniversalState, WorkspacePython,
-    detect_conflicts, store_credentials_from_target,
+use uv_command_support::{ExitStatus, Printer, UvError};
+use uv_dispatch::UniversalState;
+use uv_environment_operations::install_target::InstallTarget;
+use uv_environment_operations::{
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, detect_conflicts,
+    store_credentials_from_target,
 };
-use crate::commands::reporters::DownloadProjectReporter;
-use crate::commands::{ExitStatus, UvError};
-use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
+
+use crate::download_platform::PlatformSpec;
+use crate::download_reporter::DownloadProjectReporter;
 
 /// Download the project's pinned dependencies as wheel or sdist files into `output_dir`.
 ///
@@ -57,7 +60,7 @@ use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 ///
 /// No virtual environment is created or modified.
 #[expect(clippy::too_many_arguments)]
-pub(crate) async fn download(
+pub async fn download(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -75,7 +78,7 @@ pub(crate) async fn download(
     mut settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
-    no_config: bool,
+    config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -95,11 +98,18 @@ pub(crate) async fn download(
                 members: MemberDiscovery::None,
                 ..DiscoveryOptions::default()
             },
+            cache,
             workspace_cache,
         )
         .await?
     } else {
-        VirtualProject::discover(project_dir, &DiscoveryOptions::default(), workspace_cache).await?
+        VirtualProject::discover(
+            project_dir,
+            &DiscoveryOptions::default(),
+            cache,
+            workspace_cache,
+        )
+        .await?
     };
 
     // Compute the default dependency groups and extras for the workspace.
@@ -115,27 +125,26 @@ pub(crate) async fn download(
     //    (regardless of `--frozen`) because the discovery doesn't depend on the lock;
     //    this mirrors how `uv sync` resolves its environment before `LockMode` is computed.
     let groups_for_discovery = DependencyGroupsWithDefaults::none();
-    let workspace_python = WorkspacePython::from_request(
+    let project_python = ProjectPythonRequest::from_request(
         python.as_deref().map(PythonRequest::parse),
         Some(project.workspace()),
         &groups_for_discovery,
         project_dir,
-        no_config,
+        config_discovery,
     )
     .await?;
     let interpreter = ProjectInterpreter::discover(
-        project.workspace(),
-        &groups_for_discovery,
-        workspace_python,
+        ProjectEnvironmentTarget::from(project.workspace()),
+        project_python,
         &client_builder,
         python_preference,
+        None,
         python_downloads,
         &install_mirrors,
         ProjectEnvironmentPolicy::Optional,
-        Some(false),
+        ActiveEnvironment::Ignore,
         cache,
         printer,
-        preview,
     )
     .await?
     .into_interpreter();
@@ -151,10 +160,17 @@ pub(crate) async fn download(
 
     // 5. Execute the lock operation (resolve / read the lockfile).
     let lock_target = LockTarget::from(project.workspace());
+    let download_index_locations = settings.index_locations.clone();
 
     // Tolerate trailing-slash differences between `--default-index` and the source URL
-    // already recorded in the lockfile — see `align_index_trailing_slash_with_lock`.
-    align_index_trailing_slash_with_lock(&mut settings.index_locations, lock_target).await;
+    // already recorded in the lockfile. In locked mode, also keep a PyPI mirror override
+    // out of lock validation: it is a download-time URL rewrite, not a source change.
+    align_indexes_with_lock(
+        &mut settings.index_locations,
+        lock_target,
+        matches!(&mode, LockMode::Locked(..)),
+    )
+    .await;
 
     let outcome = match Box::pin(
         LockOperation::new(
@@ -174,11 +190,11 @@ pub(crate) async fn download(
     .await
     {
         Ok(result) => result,
-        Err(ProjectError::LockMismatch(prev, cur, lock_source)) => {
+        Err(LockError::LockMismatch(prev, cur, lock_source)) => {
             writeln!(
                 printer.stderr(),
                 "{}",
-                ProjectError::LockMismatch(prev, cur, lock_source)
+                LockError::LockMismatch(prev, cur, lock_source)
                     .to_string()
                     .bold()
             )?;
@@ -196,7 +212,9 @@ pub(crate) async fn download(
     // 7. Validate the target platform against the lock's supported environments.
     let environments = lock.supported_environments();
     if !environments.is_empty()
-        && !environments.iter().any(|env| env.evaluate(&marker_env, &[]))
+        && !environments
+            .iter()
+            .any(|env| env.evaluate(&marker_env, &[]))
     {
         bail!(
             "target platform not listed in `tool.uv.environments`; \
@@ -226,7 +244,7 @@ pub(crate) async fn download(
     )?;
 
     // 9. Build RegistryClient for direct-URL downloads.
-    let index_locations = &settings.index_locations;
+    let index_locations = &download_index_locations;
     let index_strategy = settings.index_strategy;
     let keyring_provider = settings.keyring_provider;
     let client_builder = client_builder.clone().keyring(keyring_provider);
@@ -287,7 +305,12 @@ pub(crate) async fn download(
     let reporter = Arc::new(DownloadProjectReporter::new(printer));
 
     let mut report = DownloadReport::default();
-    let root_name = project.workspace().pyproject_toml().project.as_ref().map(|p| &p.name);
+    let root_name = project
+        .workspace()
+        .pyproject_toml()
+        .project
+        .as_ref()
+        .map(|p| &p.name);
     let semaphore = concurrency.downloads_semaphore.clone();
     let mut tasks: JoinSet<Result<MaterializeOutcome>> = JoinSet::new();
 
@@ -308,29 +331,42 @@ pub(crate) async fn download(
                 } else {
                     wheel.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Built(BuiltDist::DirectUrl(direct)) => {
                 let filename = sanitize_artifact_filename(&direct.filename.to_string())?.to_owned();
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Built(BuiltDist::Path(local)) => {
                 let dst = output_dir.join(local.filename.to_string());
                 report.record(copy_or_link(&local.install_path, &dst)?);
             }
+            Dist::Built(BuiltDist::GitPath(git)) => {
+                warn_user!(
+                    "Skipping git source `{}` (not materialized into --output-dir)",
+                    git.filename.name
+                );
+            }
             Dist::Source(SourceDist::Registry(source)) => {
                 let url = rewrite_registry_url(source.file.url.to_url()?, mirror_base.as_ref());
-                let filename = sanitize_artifact_filename(source.file.filename.as_ref())?.to_owned();
+                let filename =
+                    sanitize_artifact_filename(source.file.filename.as_ref())?.to_owned();
                 let dst = output_dir.join(&filename);
                 let expected: Vec<HashDigest> = if source.file.hashes.is_empty() {
                     hashes.to_vec()
                 } else {
                     source.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Source(SourceDist::DirectUrl(direct)) => {
                 let raw = direct
@@ -342,9 +378,17 @@ pub(crate) async fn download(
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
-            Dist::Source(SourceDist::Git(git)) => {
+            Dist::Source(SourceDist::GitDirectory(git)) => {
+                warn_user!(
+                    "Skipping git source `{}` (not materialized into --output-dir)",
+                    git.name
+                );
+            }
+            Dist::Source(SourceDist::GitPath(git)) => {
                 warn_user!(
                     "Skipping git source `{}` (not materialized into --output-dir)",
                     git.name
@@ -455,7 +499,7 @@ fn spawn_download(
     semaphore: &Arc<Semaphore>,
     reporter: &Arc<DownloadProjectReporter>,
     name: String,
-    url: DisplaySafeUrl,
+    url: SafeUrl,
     dst: PathBuf,
     expected: Vec<HashDigest>,
 ) {
@@ -475,16 +519,8 @@ fn spawn_download(
             return Ok(outcome);
         }
         let progress_id = reporter.on_download_start();
-        let outcome = download_to(
-            &client,
-            &reporter,
-            progress_id,
-            name,
-            url,
-            &dst,
-            &expected,
-        )
-        .await?;
+        let outcome =
+            download_to(&client, &reporter, progress_id, name, url, &dst, &expected).await?;
         Ok(outcome)
     });
 }
@@ -524,17 +560,16 @@ async fn download_to(
     reporter: &DownloadProjectReporter,
     progress_id: usize,
     name: String,
-    url: DisplaySafeUrl,
+    url: SafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
 ) -> Result<MaterializeOutcome> {
-    let partial = PartialFile(
-        dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())),
-    );
+    let partial =
+        PartialFile(dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())));
 
     let response = client
         .uncached_client(&url)
-        .get(url.as_str())
+        .get(url.clone())
         .send()
         .await
         .map_err(|err| anyhow::anyhow!("failed to fetch `{url}`: {err}"))?;
@@ -551,19 +586,17 @@ async fn download_to(
 
     let mut hashers: Vec<Hasher> = expected_hashes
         .iter()
-        .map(|h| Hasher::from(h.algorithm))
+        .map(|hash| Hasher::from(hash.algorithm()))
         .collect();
 
     let mut file = fs_err::tokio::File::create(partial.path())
         .await
-        .map_err(|err| {
-            anyhow::anyhow!("failed to create `{}`: {err}", partial.path().display())
-        })?;
+        .map_err(|err| anyhow::anyhow!("failed to create `{}`: {err}", partial.path().display()))?;
 
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|err| anyhow::anyhow!("failed to read body of `{url}`: {err}"))?;
+        let chunk =
+            chunk.map_err(|err| anyhow::anyhow!("failed to read body of `{url}`: {err}"))?;
         for hasher in &mut hashers {
             hasher.update(&chunk);
         }
@@ -573,21 +606,21 @@ async fn download_to(
         reporter.on_download_progress(progress_id, chunk.len() as u64);
     }
 
-    file.flush().await.map_err(|err| {
-        anyhow::anyhow!("failed to flush `{}`: {err}", partial.path().display())
-    })?;
+    file.flush()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to flush `{}`: {err}", partial.path().display()))?;
     drop(file);
 
     // Verify hashes before renaming.
     for (expected, hasher) in expected_hashes.iter().zip(hashers) {
         let actual: uv_pypi_types::HashDigest = hasher.into();
-        if actual.digest != expected.digest {
+        if actual.digest() != expected.digest() {
             bail!(
                 "hash mismatch for `{url}`:\n  expected {}: {}\n  actual   {}: {}",
-                expected.algorithm,
-                expected.digest,
-                actual.algorithm,
-                actual.digest,
+                expected.algorithm(),
+                expected.digest(),
+                actual.algorithm(),
+                actual.digest(),
             );
         }
     }
@@ -612,10 +645,7 @@ fn existing_download_outcome(dst: &Path) -> Result<Option<MaterializeOutcome>> {
             dst.display()
         ),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(anyhow::anyhow!(
-            "failed to stat `{}`: {err}",
-            dst.display()
-        )),
+        Err(err) => Err(anyhow::anyhow!("failed to stat `{}`: {err}", dst.display())),
     }
 }
 
@@ -662,8 +692,7 @@ fn is_pypi_default(url: &IndexUrl) -> bool {
         return true;
     }
     let raw = url.url();
-    raw.host_str() == Some("pypi.org")
-        && raw.path().trim_end_matches('/') == "/simple"
+    raw.host_str() == Some("pypi.org") && raw.path().trim_end_matches('/') == "/simple"
 }
 
 /// Rewrite a PyPI-hosted Registry artifact URL to point at a user-specified mirror.
@@ -686,10 +715,7 @@ fn is_pypi_default(url: &IndexUrl) -> bool {
 /// preserved so per-file hash fragments (`#sha256=...`) continue to round-trip. The SHA-256
 /// digest recorded in the lockfile is still verified against the downloaded bytes, so a
 /// misconfigured mirror surfaces as a hash mismatch rather than a silent substitution.
-fn rewrite_registry_url(
-    original: DisplaySafeUrl,
-    mirror_base: Option<&DisplaySafeUrl>,
-) -> DisplaySafeUrl {
+fn rewrite_registry_url(original: SafeUrl, mirror_base: Option<&SafeUrl>) -> SafeUrl {
     let Some(base) = mirror_base else {
         return original;
     };
@@ -702,12 +728,12 @@ fn rewrite_registry_url(
     let packages_suffix = original.path()[idx..].to_owned();
 
     // Clone the mirror base and graft on the `/packages/...` path from the original URL.
-    // Going through `url::Url::set_*` (rather than string concatenation) keeps auth,
+    // Going through `SafeUrl::set_*` (rather than string concatenation) keeps auth,
     // port, and percent-encoding handled by the crate instead of us.
     let mut rewritten = base.clone();
     let trimmed_base_path = rewritten.path().trim_end_matches('/').to_owned();
     rewritten.set_path(&format!("{trimmed_base_path}{packages_suffix}"));
-    rewritten.set_query(original.query());
+    rewritten.set_query(original.clone().into_unsafe_url().query());
     rewritten.set_fragment(original.fragment());
     rewritten
 }
@@ -728,9 +754,10 @@ fn rewrite_registry_url(
 /// The match is intentionally narrow: equality after `trim_end_matches('/')` AND
 /// byte-inequality, so we only rewrite URLs where the trailing slash is the sole
 /// difference. `IndexUrl::Path` and unreadable lockfiles are left untouched.
-async fn align_index_trailing_slash_with_lock(
+async fn align_indexes_with_lock(
     locs: &mut IndexLocations,
     lock_target: LockTarget<'_>,
+    locked: bool,
 ) {
     let Ok(Some(lock)) = lock_target.read().await else {
         return;
@@ -747,10 +774,55 @@ async fn align_index_trailing_slash_with_lock(
         })
         .collect();
 
+    if locked {
+        realign_pypi_mirror_to_lock(locs, &lock_urls);
+    }
     realign_index_trailing_slash(locs, &lock_urls);
 }
 
-/// Pure core of [`align_index_trailing_slash_with_lock`] — kept separate so it can be
+/// During `--locked` validation, replace a download-time PyPI mirror with the PyPI
+/// source recorded in the lockfile.
+///
+/// The original locations are retained separately for the artifact client. This only
+/// applies to CLI/environment-supplied simple-index URLs with a derivable mirror root,
+/// and only when the lock contains PyPI itself; project configuration and custom
+/// registry sources are never substituted.
+fn realign_pypi_mirror_to_lock(locs: &mut IndexLocations, lock_urls: &[String]) {
+    let Some(lock_form) = lock_urls.iter().find(|raw| {
+        SafeUrl::parse(raw).is_ok_and(|url| {
+            url.host_str() == Some("pypi.org") && url.path().trim_end_matches('/') == "/simple"
+        })
+    }) else {
+        return;
+    };
+
+    let mut modified: Vec<Index> = locs.simple_indexes().cloned().collect();
+    let Some(index) = modified.iter_mut().find(|index| index.default) else {
+        return;
+    };
+    if matches!(index.url, IndexUrl::Path(_))
+        || index.origin != Some(Origin::Cli)
+        || is_pypi_default(&index.url)
+        || index.url.root().is_none()
+    {
+        return;
+    }
+
+    let Ok(parsed) = SafeUrl::parse(lock_form) else {
+        return;
+    };
+    let new_verbatim = Arc::new(VerbatimUrl::from_url(parsed.with_policy(Stripped)));
+    match &mut index.url {
+        IndexUrl::Pypi(arc) | IndexUrl::Url(arc) => *arc = new_verbatim,
+        IndexUrl::Path(_) => return,
+    }
+
+    let flat = locs.flat_indexes().cloned().collect::<Vec<_>>();
+    let no_index = locs.no_index();
+    *locs = IndexLocations::new(modified, flat, no_index);
+}
+
+/// Pure core of [`align_indexes_with_lock`] — kept separate so it can be
 /// exercised by unit tests without spinning up a real lockfile/workspace.
 fn realign_index_trailing_slash(locs: &mut IndexLocations, lock_urls: &[String]) {
     if lock_urls.is_empty() {
@@ -771,10 +843,10 @@ fn realign_index_trailing_slash(locs: &mut IndexLocations, lock_urls: &[String])
         else {
             continue;
         };
-        let Ok(parsed) = DisplaySafeUrl::parse(lock_form) else {
+        let Ok(parsed) = SafeUrl::parse(lock_form) else {
             continue;
         };
-        let new_verbatim = Arc::new(VerbatimUrl::from_url(parsed));
+        let new_verbatim = Arc::new(VerbatimUrl::from_url(parsed.with_policy(Stripped)));
         match &mut index.url {
             IndexUrl::Pypi(arc) | IndexUrl::Url(arc) => *arc = new_verbatim,
             IndexUrl::Path(_) => continue,
@@ -808,10 +880,7 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
         ),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
-            return Err(anyhow::anyhow!(
-                "failed to stat `{}`: {err}",
-                dst.display()
-            ));
+            return Err(anyhow::anyhow!("failed to stat `{}`: {err}", dst.display()));
         }
     }
     if let Err(_link_err) = fs_err::hard_link(src, dst) {
@@ -820,9 +889,8 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
             src.display(),
             dst.display()
         );
-        let partial = PartialFile(
-            dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())),
-        );
+        let partial =
+            PartialFile(dst.with_extension(format!("partial-{}", Uuid::new_v4().as_simple())));
         fs_err::copy(src, partial.path()).map_err(|copy_err| {
             anyhow::anyhow!(
                 "failed to copy `{}` to `{}`: {copy_err}",
@@ -830,9 +898,8 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
                 partial.path().display(),
             )
         })?;
-        fs_err::rename(partial.path(), dst).map_err(|err| {
-            anyhow::anyhow!("failed to finalize `{}`: {err}", dst.display())
-        })?;
+        fs_err::rename(partial.path(), dst)
+            .map_err(|err| anyhow::anyhow!("failed to finalize `{}`: {err}", dst.display()))?;
     }
     Ok(MaterializeOutcome::Written)
 }
@@ -840,14 +907,14 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_pypi_default, realign_index_trailing_slash, rewrite_registry_url,
-        sanitize_artifact_filename,
+        is_pypi_default, realign_index_trailing_slash, realign_pypi_mirror_to_lock,
+        rewrite_registry_url, sanitize_artifact_filename,
     };
-    use uv_distribution_types::{Index, IndexLocations, IndexUrl};
-    use uv_redacted::DisplaySafeUrl;
+    use uv_distribution_types::{Index, IndexLocations, IndexUrl, Origin};
+    use uv_redacted::SafeUrl;
 
-    fn url(s: &str) -> DisplaySafeUrl {
-        DisplaySafeUrl::parse(s).unwrap()
+    fn url(s: &str) -> SafeUrl {
+        SafeUrl::parse(s).unwrap()
     }
 
     #[test]
@@ -873,8 +940,7 @@ mod tests {
 
     #[test]
     fn rewrite_tsinghua_mirror_strips_trailing_slash() {
-        let original =
-            url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz");
+        let original = url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz");
         // `IndexUrl::root()` normally returns a URL without a trailing slash; accept either
         // form defensively so manual callers (and tests) don't need to care.
         let mirror = url("https://pypi.tuna.tsinghua.edu.cn/");
@@ -923,16 +989,15 @@ mod tests {
     #[test]
     fn rewrite_end_to_end_via_index_url_root() {
         // Drive the full pipeline: IndexUrl::parse → .root() → rewrite. This catches
-        // behavior changes in `IndexUrl::root()` or in how `DisplaySafeUrl` round-trips
+        // behavior changes in `IndexUrl::root()` or in how `SafeUrl` round-trips
         // the trailing slash after `pop_if_empty().pop()`.
         use uv_distribution_types::IndexUrl;
 
         // With trailing slash on --default-index.
         let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple/", None).unwrap();
         let base = index.root().unwrap();
-        let original = url(
-            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
-        );
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl");
         let rewritten = rewrite_registry_url(original, Some(&base));
         assert_eq!(
             rewritten.as_str(),
@@ -942,9 +1007,8 @@ mod tests {
         // Without trailing slash on --default-index.
         let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple", None).unwrap();
         let base = index.root().unwrap();
-        let original = url(
-            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
-        );
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl");
         let rewritten = rewrite_registry_url(original, Some(&base));
         assert_eq!(
             rewritten.as_str(),
@@ -955,7 +1019,8 @@ mod tests {
     /// Construct an `IndexLocations` containing a single simple index parsed from `s`,
     /// the way `--default-index <s>` flows in production.
     fn locs_with_index(s: &str) -> IndexLocations {
-        let index = Index::from_index_url(IndexUrl::parse(s, None).unwrap());
+        let mut index = Index::from_index_url(IndexUrl::parse(s, None).unwrap());
+        index.origin = Some(Origin::Cli);
         IndexLocations::new(vec![index], Vec::new(), false)
     }
 
@@ -970,7 +1035,10 @@ mod tests {
         let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
         let lock_urls = vec!["https://mirrors.ustc.edu.cn/pypi/simple/".to_string()];
         realign_index_trailing_slash(&mut locs, &lock_urls);
-        assert_eq!(cli_url_str(&locs), "https://mirrors.ustc.edu.cn/pypi/simple/");
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple/"
+        );
     }
 
     #[test]
@@ -980,7 +1048,10 @@ mod tests {
         let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
         let lock_urls = vec!["https://mirrors.ustc.edu.cn/pypi/simple".to_string()];
         realign_index_trailing_slash(&mut locs, &lock_urls);
-        assert_eq!(cli_url_str(&locs), "https://mirrors.ustc.edu.cn/pypi/simple");
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple"
+        );
     }
 
     #[test]
@@ -1014,7 +1085,10 @@ mod tests {
             "https://other.example.com/simple".to_string(),
         ];
         realign_index_trailing_slash(&mut locs, &lock_urls);
-        assert_eq!(cli_url_str(&locs), "https://mirrors.ustc.edu.cn/pypi/simple/");
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple/"
+        );
     }
 
     #[test]
@@ -1022,6 +1096,35 @@ mod tests {
         let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
         let before = cli_url_str(&locs);
         realign_index_trailing_slash(&mut locs, &[]);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_pypi_mirror_to_lock_for_locked_validation() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let lock_urls = vec!["https://pypi.org/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), "https://pypi.org/simple");
+    }
+
+    #[test]
+    fn realign_pypi_mirror_does_not_replace_custom_lock_source() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://packages.example.com/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_pypi_mirror_does_not_replace_project_configuration() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let mut project_index = locs.simple_indexes().next().unwrap().clone();
+        project_index.origin = Some(Origin::Project);
+        locs = IndexLocations::new(vec![project_index], Vec::new(), false);
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://pypi.org/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
         assert_eq!(cli_url_str(&locs), before);
     }
 

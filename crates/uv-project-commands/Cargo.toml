@@ -28,6 +28,7 @@ uv-cache-key = { workspace = true }
 uv-client = { workspace = true }
 uv-command-support = { workspace = true }
 uv-configuration = { workspace = true }
+uv-console = { workspace = true }
 uv-dispatch = { workspace = true }
 uv-distribution = { workspace = true }
 uv-distribution-types = { workspace = true }
@@ -40,6 +41,8 @@ uv-install-operations = { workspace = true }
 uv-install-wheel = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
+uv-extract = { workspace = true }
+uv-platform-tags = { workspace = true }
 uv-lock-operations = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
@@ -85,3 +88,4 @@ tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true, features = ["std", "v4"] }
