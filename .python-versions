@@ -8,7 +8,7 @@
 # first need to complete a uv release capable of installing that version, get it picked up by
 # astral-sh/setup-uv, and update its hash in .github/workflows.
 
-3.14.0
+3.14
 3.13.2
 3.12.9
 3.11.11
