@@ -3,6 +3,7 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
 
+use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 /// Selected dependency groups contribute Python requirements before marker evaluation.
@@ -781,6 +782,52 @@ async fn download_direct_url_wheel_hash_matches_lockfile() -> Result<()> {
 }
 
 #[test]
+fn download_default_index_local_path_warns() -> Result<()> {
+    // `--default-index` pointing at a local path cannot be used as a mirror for rewriting
+    // `files.pythonhosted.org` URLs, so uv download should warn and fall back to the URLs
+    // recorded in the lockfile. Uses `--frozen` so the resolve step doesn't consult the
+    // (empty) path index.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    // Generate the lockfile against PyPI first, so `uv.lock` has real URLs.
+    context.lock().assert().success();
+
+    // Point `--default-index` at an empty local directory. The directory must exist
+    // because `IndexUrl::parse` resolves the path.
+    let fake_index = context.temp_dir.child("fake_index");
+    fake_index.create_dir_all()?;
+    let fake_index_url = format!("file://{}", fake_index.path().display());
+
+    let out = context.temp_dir.child("pkgs");
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--frozen")
+            .arg("--default-index")
+            .arg(&fake_index_url)
+            .arg("-o").arg(out.path()),
+        @r"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        warning: `--default-index` points at a local path; `uv download` cannot rewrite recorded artifact URLs to a filesystem index and will use the URLs in `uv.lock` as-is
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
+    );
+    Ok(())
+}
+
+#[test]
 fn download_trusts_existing_wheel_without_rehashing() -> Result<()> {
     // The atomic partial→rename pattern in `download_to` and `copy_or_link` guarantees that
     // a regular file at `dst` is whole and already passed hash verification on its first
@@ -903,5 +950,165 @@ fn download_rejects_unknown_group() -> Result<()> {
                 || stderr.to_ascii_lowercase().contains("dependency-group")),
         "expected unknown-group error, got stderr:\n{stderr}"
     );
+    Ok(())
+}
+
+#[test]
+fn download_explicit_pypi_simple_with_trailing_slash() -> Result<()> {
+    // Previously `--default-index https://pypi.org/simple/` (with trailing slash) was not
+    // tagged as `IndexUrl::Pypi` and would rewrite artifact URLs to the invalid
+    // `https://pypi.org/packages/...`. Treating it as PyPI itself keeps the real
+    // `files.pythonhosted.org` URLs in place.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+    context.lock().assert().success();
+
+    let out = context.temp_dir.child("pkgs");
+    let assert = context
+        .download()
+        .arg("--frozen")
+        .arg("--default-index")
+        .arg("https://pypi.org/simple/")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        !stderr.contains("will use the URLs in `uv.lock` as-is"),
+        "PyPI should not trigger the mirror-fallback warn path, got:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn download_default_index_non_simple_url_warns() -> Result<()> {
+    // `--default-index` pointing at a URL whose final segment is not `simple` / `+simple`
+    // can't be turned into a mirror base, so uv download should warn and fall back to the
+    // URLs recorded in the lockfile.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    context.lock().assert().success();
+
+    let out = context.temp_dir.child("pkgs");
+    uv_snapshot!(
+        context.filters(),
+        context
+            .download()
+            .arg("--frozen")
+            .arg("--default-index")
+            .arg("https://example.invalid/pypi/not-ending-in-simple")
+            .arg("-o").arg(out.path()),
+        @r"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+        warning: `--default-index` was provided but its URL does not end in `simple` / `+simple`; `uv download` does not know how to derive a mirror file base and will use the URLs in `uv.lock` as-is
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
+    );
+    Ok(())
+}
+
+#[test]
+fn download_default_index_trailing_slash_does_not_force_resolve() -> Result<()> {
+    // `IndexUrl`'s `Hash`/`Eq` are derived from raw URL bytes, and `Lock::satisfies`
+    // builds its remote-index set with `UrlString::from(url)` which is also byte-wise
+    // (see `crates/uv-resolver/src/lock/mod.rs` around line 1925). So lockfile-source
+    // `https://x/simple/` paired with CLI `https://x/simple` would otherwise produce
+    // `MissingRemoteIndex` and force a fresh resolve — which on a flaky mirror can
+    // 302→403 on macOS-only wheels that don't exist locally.
+    //
+    // With alignment, the CLI form is rewritten to match the lockfile, the lock
+    // satisfies on the first try, and `--locked` mode (which would surface a real
+    // mismatch as a hard error) succeeds.
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+    // Lock with the trailing-slash form so the lockfile records `.../simple/`.
+    context
+        .lock()
+        .arg("--default-index")
+        .arg("https://pypi.org/simple/")
+        .assert()
+        .success();
+
+    let out = context.temp_dir.child("pkgs");
+    // Pass the no-slash form. `--locked` keeps the lock file untouched: if alignment
+    // failed and the lock no longer satisfied, the resolver would re-resolve and then
+    // detect a mismatch against the on-disk lock, exiting non-zero — exactly the
+    // signal we want to fail loudly on without depending on stderr line shape.
+    context
+        .download()
+        .arg("--locked")
+        .arg("--default-index")
+        .arg("https://pypi.org/simple")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn download_locked_accepts_default_index_as_artifact_mirror() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+        "#,
+    )?;
+
+    let out = context.temp_dir.child("pkgs");
+    context
+        .download()
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+    let lock_before = fs_err::read(context.temp_dir.child("uv.lock").path())?;
+
+    // Use an unreachable mirror with an already materialized artifact. Success proves
+    // the mirror does not invalidate the PyPI lock; URL rewrite behavior is covered by
+    // the unit tests in `commands::project::download`.
+    context
+        .download()
+        .arg("--locked")
+        .env(EnvVars::UV_DEFAULT_INDEX, "https://example.invalid/simple")
+        .arg("-o")
+        .arg(out.path())
+        .assert()
+        .success();
+
+    let lock_after = fs_err::read(context.temp_dir.child("uv.lock").path())?;
+    assert_eq!(lock_after, lock_before, "--locked modified uv.lock");
     Ok(())
 }

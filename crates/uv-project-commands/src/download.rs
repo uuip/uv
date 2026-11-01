@@ -17,16 +17,21 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, ExtrasSpecification, InstallOptions,
     PlatformOs, PyImpl, TargetTriple,
 };
-use uv_distribution_types::{BuiltDist, Dist, RemoteSource, ResolvedDist, SourceDist};
+use uv_distribution_types::{
+    BuiltDist, Dist, Index, IndexLocations, IndexUrl, Origin, RemoteSource, ResolvedDist,
+    SourceDist,
+};
 use uv_extract::hash::Hasher;
 use uv_lock::Lock;
 use uv_normalize::DefaultExtras;
+use uv_pep508::VerbatimUrl;
 use uv_platform_tags::Arch;
 use uv_preview::Preview;
 use uv_pypi_types::HashDigest;
 use uv_python_discovery::{ConfigDiscovery, ProjectPythonRequest};
 use uv_python_types::{PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::SafeUrl;
+use uv_redacted::policy::Stripped;
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
@@ -69,7 +74,7 @@ pub async fn download(
     install_mirrors: PythonInstallMirrors,
     python_preference: PythonPreference,
     python_downloads: PythonDownloads,
-    settings: ResolverSettings,
+    mut settings: ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
@@ -167,6 +172,18 @@ pub async fn download(
     };
 
     // 5. Execute the lock operation (resolve / read the lockfile).
+    let download_index_locations = settings.index_locations.clone();
+
+    // Tolerate trailing-slash differences between `--default-index` and the source URL
+    // already recorded in the lockfile. In locked mode, also keep a PyPI mirror override
+    // out of lock validation: it is a download-time URL rewrite, not a source change.
+    align_indexes_with_lock(
+        &mut settings.index_locations,
+        lock_target,
+        matches!(&mode, LockMode::Locked(..)),
+    )
+    .await;
+
     let outcome = match Box::pin(
         LockOperation::new(
             mode,
@@ -239,7 +256,7 @@ pub async fn download(
     )?;
 
     // 9. Build RegistryClient for direct-URL downloads.
-    let index_locations = &settings.index_locations;
+    let index_locations = &download_index_locations;
     let index_strategy = settings.index_strategy;
     let keyring_provider = settings.keyring_provider;
     let client_builder = client_builder.clone().keyring(keyring_provider);
@@ -248,6 +265,39 @@ pub async fn download(
     // so under `--frozen` we rely on `pyproject.toml` (`tool.uv.sources`, direct-URL deps,
     // `--index` auth) to hydrate the client before any request goes out.
     store_credentials_from_target(install_target, &client_builder)?;
+
+    // If the user explicitly pointed `--default-index` at a non-PyPI mirror, rewrite the
+    // Registry artifact URLs stored in the lockfile to point at that mirror. The lockfile
+    // bakes in whatever URL the original resolve saw (typically `files.pythonhosted.org`
+    // for PyPI), so without this, passing `--default-index` to `uv download` would have
+    // no effect on a pre-existing lock. The mirror base is derived by stripping the
+    // trailing `simple` segment from the index URL, which matches the layout published by
+    // bandersnatch-style mirrors (Tsinghua, USTC, Aliyun). Warn rather than silently
+    // ignore the flag when the shape is one we don't know how to turn into a file base —
+    // a silent no-op here is confusing, especially for local-path indexes.
+    let mirror_base = match index_locations.default_index() {
+        Some(index) if is_pypi_default(&index.url) => None,
+        Some(index) => match (&index.url, index.url.root()) {
+            (IndexUrl::Path(_), _) => {
+                warn_user!(
+                    "`--default-index` points at a local path; `uv download` cannot rewrite \
+                     recorded artifact URLs to a filesystem index and will use the URLs in \
+                     `uv.lock` as-is"
+                );
+                None
+            }
+            (_, None) => {
+                warn_user!(
+                    "`--default-index` was provided but its URL does not end in `simple` / \
+                     `+simple`; `uv download` does not know how to derive a mirror file \
+                     base and will use the URLs in `uv.lock` as-is"
+                );
+                None
+            }
+            (_, Some(root)) => Some(root),
+        },
+        None => None,
+    };
 
     let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
         .index_locations(index_locations.clone())
@@ -281,7 +331,7 @@ pub async fn download(
         match dist.as_ref() {
             Dist::Built(BuiltDist::Registry(built)) => {
                 let wheel = built.best_wheel();
-                let url = wheel.file.url.to_url()?;
+                let url = rewrite_registry_url(wheel.file.url.to_url()?, mirror_base.as_ref());
                 let filename = sanitize_artifact_filename(wheel.file.filename.as_ref())?.to_owned();
                 let dst = output_dir.join(&filename);
                 // Prefer the per-file hashes published on the index; fall back to the
@@ -311,7 +361,7 @@ pub async fn download(
                 );
             }
             Dist::Source(SourceDist::Registry(source)) => {
-                let url = source.file.url.to_url()?;
+                let url = rewrite_registry_url(source.file.url.to_url()?, mirror_base.as_ref());
                 let filename =
                     sanitize_artifact_filename(source.file.filename.as_ref())?.to_owned();
                 let dst = output_dir.join(&filename);
@@ -610,6 +660,198 @@ fn sanitize_artifact_filename(raw: &str) -> Result<&str> {
     Ok(trimmed)
 }
 
+/// The host served by PyPI for distribution artifacts (wheels, sdists).
+///
+/// Narrows [`rewrite_registry_url`] to the one host we know bandersnatch-style mirrors
+/// actually clone from. Lockfiles with artifact URLs pointing at a custom/corporate index
+/// with its own layout are left untouched — rewriting them to `{mirror}/packages/...`
+/// would silently 404 and the user would have no way to tell what happened.
+const PYPI_FILE_HOST: &str = "files.pythonhosted.org";
+
+/// Returns `true` when `url` points at PyPI itself (and not a mirror clone of it).
+///
+/// The canonical built-in is already tagged as [`IndexUrl::Pypi`] by the parser, but that
+/// tag is applied only when the user-supplied URL matches the `PYPI_URL` constant byte-for-byte.
+/// So `https://pypi.org/simple/` (with trailing slash) — or any equivalent variant — is
+/// classified as a generic `IndexUrl::Url`, and would then be treated as a mirror by
+/// [`rewrite_registry_url`], silently rewriting PyPI artifact URLs to the invalid
+/// `https://pypi.org/packages/...`. Checking the host explicitly catches these variants.
+fn is_pypi_default(url: &IndexUrl) -> bool {
+    if matches!(url, IndexUrl::Pypi(_)) {
+        return true;
+    }
+    let raw = url.url();
+    raw.host_str() == Some("pypi.org") && raw.path().trim_end_matches('/') == "/simple"
+}
+
+/// Rewrite a PyPI-hosted Registry artifact URL to point at a user-specified mirror.
+///
+/// Called only by `uv download`, and only in memory — the `uv.lock` file on disk is never
+/// modified. Rewriting triggers only when:
+///   1. the caller passed a `mirror_base` (i.e. `--default-index` was set to something
+///      other than the built-in PyPI),
+///   2. the original URL's host is [`PYPI_FILE_HOST`], and
+///   3. the original URL's path contains `/packages/` (the standard layout shared by PyPI
+///      and its bandersnatch-style mirrors — Tsinghua, USTC, Aliyun).
+///
+/// `mirror_base` is the URL of the mirror **root**, without the trailing `simple` segment
+/// of the simple-index URL. It is typically obtained by calling `IndexUrl::root()` on the
+/// user-provided `--default-index` — that method strips the `simple` / `+simple` tail for
+/// us, so e.g. `https://mirrors.ustc.edu.cn/pypi/simple/` becomes
+/// `https://mirrors.ustc.edu.cn/pypi` before reaching this function.
+///
+/// The resulting URL is `{mirror_base}/packages/...` with the original query and fragment
+/// preserved so per-file hash fragments (`#sha256=...`) continue to round-trip. The SHA-256
+/// digest recorded in the lockfile is still verified against the downloaded bytes, so a
+/// misconfigured mirror surfaces as a hash mismatch rather than a silent substitution.
+fn rewrite_registry_url(original: SafeUrl, mirror_base: Option<&SafeUrl>) -> SafeUrl {
+    let Some(base) = mirror_base else {
+        return original;
+    };
+    if original.host_str() != Some(PYPI_FILE_HOST) {
+        return original;
+    }
+    let Some(idx) = original.path().find("/packages/") else {
+        return original;
+    };
+    let packages_suffix = original.path()[idx..].to_owned();
+
+    // Clone the mirror base and graft on the `/packages/...` path from the original URL.
+    // Going through `SafeUrl::set_*` (rather than string concatenation) keeps auth,
+    // port, and percent-encoding handled by the crate instead of us.
+    let mut rewritten = base.clone();
+    let trimmed_base_path = rewritten.path().trim_end_matches('/').to_owned();
+    rewritten.set_path(&format!("{trimmed_base_path}{packages_suffix}"));
+    rewritten.set_query(original.clone().into_unsafe_url().query());
+    rewritten.set_fragment(original.fragment());
+    rewritten
+}
+
+/// Reconcile the trailing-slash form of the user-supplied simple indexes with whatever
+/// is already recorded in the lockfile, in place.
+///
+/// `IndexUrl`'s `Hash`/`Eq` come from the raw URL bytes, so `https://x/simple` and
+/// `https://x/simple/` are treated as distinct sources by `LockOperation`'s satisfiability
+/// check. When the only difference between a CLI-supplied index URL and the source URL
+/// stored in the lockfile is a trailing `/`, the user almost certainly means the same
+/// mirror — but the byte-mismatch forces a needless re-resolve that round-trips to the
+/// network. On a flaky mirror that re-resolve can fail outright (e.g. cross-mirror
+/// 302→403 on macOS wheels that don't exist locally), even though the recorded artifact
+/// URLs would have downloaded fine. Aligning the CLI form to the lockfile form lets the
+/// existing lock satisfy and skips the re-resolve.
+///
+/// The match is intentionally narrow: equality after `trim_end_matches('/')` AND
+/// byte-inequality, so we only rewrite URLs where the trailing slash is the sole
+/// difference. `IndexUrl::Path` and unreadable lockfiles are left untouched.
+async fn align_indexes_with_lock(
+    locs: &mut IndexLocations,
+    lock_target: LockTarget<'_>,
+    locked: bool,
+) {
+    let Ok(Some(lock)) = lock_target.read().await else {
+        return;
+    };
+    let root = lock_target.install_path();
+
+    let lock_urls: Vec<String> = lock
+        .packages()
+        .iter()
+        .filter_map(|pkg| pkg.index(root).ok().flatten())
+        .filter_map(|index| match index {
+            IndexUrl::Url(url) | IndexUrl::Pypi(url) => Some(url.raw().to_string()),
+            IndexUrl::Path(_) => None,
+        })
+        .collect();
+
+    if locked {
+        realign_pypi_mirror_to_lock(locs, &lock_urls);
+    }
+    realign_index_trailing_slash(locs, &lock_urls);
+}
+
+/// During `--locked` validation, replace a download-time PyPI mirror with the PyPI
+/// source recorded in the lockfile.
+///
+/// The original locations are retained separately for the artifact client. This only
+/// applies to CLI/environment-supplied simple-index URLs with a derivable mirror root,
+/// and only when the lock contains PyPI itself; project configuration and custom
+/// registry sources are never substituted.
+fn realign_pypi_mirror_to_lock(locs: &mut IndexLocations, lock_urls: &[String]) {
+    let Some(lock_form) = lock_urls.iter().find(|raw| {
+        SafeUrl::parse(raw).is_ok_and(|url| {
+            url.host_str() == Some("pypi.org") && url.path().trim_end_matches('/') == "/simple"
+        })
+    }) else {
+        return;
+    };
+
+    let mut modified: Vec<Index> = locs.simple_indexes().cloned().collect();
+    let Some(index) = modified.iter_mut().find(|index| index.default) else {
+        return;
+    };
+    if matches!(index.url, IndexUrl::Path(_))
+        || index.origin != Some(Origin::Cli)
+        || is_pypi_default(&index.url)
+        || index.url.root().is_none()
+    {
+        return;
+    }
+
+    let Ok(parsed) = SafeUrl::parse(lock_form) else {
+        return;
+    };
+    let new_verbatim = Arc::new(VerbatimUrl::from_url(parsed.with_policy(Stripped)));
+    match &mut index.url {
+        IndexUrl::Pypi(arc) | IndexUrl::Url(arc) => *arc = new_verbatim,
+        IndexUrl::Path(_) => return,
+    }
+
+    let flat = locs.flat_indexes().cloned().collect::<Vec<_>>();
+    let no_index = locs.no_index();
+    *locs = IndexLocations::new(modified, flat, no_index);
+}
+
+/// Pure core of [`align_indexes_with_lock`] — kept separate so it can be
+/// exercised by unit tests without spinning up a real lockfile/workspace.
+fn realign_index_trailing_slash(locs: &mut IndexLocations, lock_urls: &[String]) {
+    if lock_urls.is_empty() {
+        return;
+    }
+
+    let mut modified: Vec<Index> = locs.simple_indexes().cloned().collect();
+    let mut changed = false;
+    for index in &mut modified {
+        let cli_str = match &index.url {
+            IndexUrl::Url(url) | IndexUrl::Pypi(url) => url.raw().to_string(),
+            IndexUrl::Path(_) => continue,
+        };
+        let cli_trimmed = cli_str.trim_end_matches('/');
+        let Some(lock_form) = lock_urls
+            .iter()
+            .find(|s| s.as_str() != cli_str && s.trim_end_matches('/') == cli_trimmed)
+        else {
+            continue;
+        };
+        let Ok(parsed) = SafeUrl::parse(lock_form) else {
+            continue;
+        };
+        let new_verbatim = Arc::new(VerbatimUrl::from_url(parsed.with_policy(Stripped)));
+        match &mut index.url {
+            IndexUrl::Pypi(arc) | IndexUrl::Url(arc) => *arc = new_verbatim,
+            IndexUrl::Path(_) => continue,
+        }
+        changed = true;
+    }
+
+    if !changed {
+        return;
+    }
+
+    let flat = locs.flat_indexes().cloned().collect::<Vec<_>>();
+    let no_index = locs.no_index();
+    *locs = IndexLocations::new(modified, flat, no_index);
+}
+
 /// Hard-link or copy a local path artifact into the output directory.
 ///
 /// `hard_link` is atomic; the `fs_err::copy` fallback writes through a
@@ -653,7 +895,227 @@ fn copy_or_link(src: &Path, dst: &Path) -> Result<MaterializeOutcome> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_artifact_filename;
+    use super::{
+        is_pypi_default, realign_index_trailing_slash, realign_pypi_mirror_to_lock,
+        rewrite_registry_url, sanitize_artifact_filename,
+    };
+    use uv_distribution_types::{Index, IndexLocations, IndexUrl, Origin};
+    use uv_redacted::SafeUrl;
+
+    fn url(s: &str) -> SafeUrl {
+        SafeUrl::parse(s).unwrap()
+    }
+
+    #[test]
+    fn rewrite_passthrough_without_mirror() {
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0-py3-none-any.whl");
+        let rewritten = rewrite_registry_url(original.clone(), None);
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_ustc_mirror() {
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl#sha256=deadbeef",
+        );
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi/");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl#sha256=deadbeef",
+        );
+    }
+
+    #[test]
+    fn rewrite_tsinghua_mirror_strips_trailing_slash() {
+        let original = url("https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz");
+        // `IndexUrl::root()` normally returns a URL without a trailing slash; accept either
+        // form defensively so manual callers (and tests) don't need to care.
+        let mirror = url("https://pypi.tuna.tsinghua.edu.cn/");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://pypi.tuna.tsinghua.edu.cn/packages/aa/bb/foo-1.0.tar.gz",
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_query() {
+        let original = url(
+            "https://files.pythonhosted.org/packages/aa/bb/foo-1.0.tar.gz?token=abc#sha256=beef",
+        );
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original, Some(&mirror));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/foo-1.0.tar.gz?token=abc#sha256=beef",
+        );
+    }
+
+    #[test]
+    fn rewrite_skips_non_pypi_style_paths() {
+        // A URL without `/packages/` in the path (e.g. a custom index that uses a different
+        // layout) is left untouched — we don't have enough information to know where the
+        // mirror would serve the file.
+        let original = url("https://files.pythonhosted.org/wheels/foo-1.0-py3-none-any.whl");
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original.clone(), Some(&mirror));
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_skips_non_pypi_hosts() {
+        // URLs from corporate/custom indexes (anything other than files.pythonhosted.org)
+        // are left alone. Rewriting them to `{mirror}/packages/...` would silently 404
+        // because mirrors clone from PyPI, not from the custom index.
+        let original = url("https://corp.example.com/artifactory/pypi/packages/foo.whl");
+        let mirror = url("https://mirrors.ustc.edu.cn/pypi");
+        let rewritten = rewrite_registry_url(original.clone(), Some(&mirror));
+        assert_eq!(rewritten.as_str(), original.as_str());
+    }
+
+    #[test]
+    fn rewrite_end_to_end_via_index_url_root() {
+        // Drive the full pipeline: IndexUrl::parse → .root() → rewrite. This catches
+        // behavior changes in `IndexUrl::root()` or in how `SafeUrl` round-trips
+        // the trailing slash after `pop_if_empty().pop()`.
+        use uv_distribution_types::IndexUrl;
+
+        // With trailing slash on --default-index.
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple/", None).unwrap();
+        let base = index.root().unwrap();
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl");
+        let rewritten = rewrite_registry_url(original, Some(&base));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+
+        // Without trailing slash on --default-index.
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple", None).unwrap();
+        let base = index.root().unwrap();
+        let original =
+            url("https://files.pythonhosted.org/packages/aa/bb/cc/foo-1.0-py3-none-any.whl");
+        let rewritten = rewrite_registry_url(original, Some(&base));
+        assert_eq!(
+            rewritten.as_str(),
+            "https://mirrors.ustc.edu.cn/pypi/packages/aa/bb/cc/foo-1.0-py3-none-any.whl",
+        );
+    }
+
+    /// Construct an `IndexLocations` containing a single simple index parsed from `s`,
+    /// the way `--default-index <s>` flows in production.
+    fn locs_with_index(s: &str) -> IndexLocations {
+        let mut index = Index::from_index_url(IndexUrl::parse(s, None).unwrap());
+        index.origin = Some(Origin::Cli);
+        IndexLocations::new(vec![index], Vec::new(), false)
+    }
+
+    fn cli_url_str(locs: &IndexLocations) -> String {
+        locs.simple_indexes().next().unwrap().url.url().to_string()
+    }
+
+    #[test]
+    fn realign_cli_no_slash_to_lock_with_slash() {
+        // `--default-index https://x/simple` + `uv.lock` source `https://x/simple/`
+        // must rewrite the CLI form to match the lockfile so satisfiability holds.
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
+        let lock_urls = vec!["https://mirrors.ustc.edu.cn/pypi/simple/".to_string()];
+        realign_index_trailing_slash(&mut locs, &lock_urls);
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple/"
+        );
+    }
+
+    #[test]
+    fn realign_cli_with_slash_to_lock_no_slash() {
+        // Reverse direction: lockfile recorded the no-slash form (e.g. produced by an
+        // earlier resolve that stripped it); CLI passes the slashed form.
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let lock_urls = vec!["https://mirrors.ustc.edu.cn/pypi/simple".to_string()];
+        realign_index_trailing_slash(&mut locs, &lock_urls);
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple"
+        );
+    }
+
+    #[test]
+    fn realign_byte_equal_is_noop() {
+        // Already byte-equal to the lockfile — must not touch the URL.
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://mirrors.ustc.edu.cn/pypi/simple/".to_string()];
+        realign_index_trailing_slash(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_no_match_is_noop() {
+        // A different host shares no trim-equal source in the lockfile — leave alone.
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://example.com/simple/".to_string()];
+        realign_index_trailing_slash(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_picks_trim_equal_among_multiple() {
+        // Lockfile mixes registry URLs from several sources; only the trim-equal one
+        // governs alignment, the rest are inert.
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
+        let lock_urls = vec![
+            "https://example.com/simple/".to_string(),
+            "https://mirrors.ustc.edu.cn/pypi/simple/".to_string(),
+            "https://other.example.com/simple".to_string(),
+        ];
+        realign_index_trailing_slash(&mut locs, &lock_urls);
+        assert_eq!(
+            cli_url_str(&locs),
+            "https://mirrors.ustc.edu.cn/pypi/simple/"
+        );
+    }
+
+    #[test]
+    fn realign_empty_lock_urls_is_noop() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple");
+        let before = cli_url_str(&locs);
+        realign_index_trailing_slash(&mut locs, &[]);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_pypi_mirror_to_lock_for_locked_validation() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let lock_urls = vec!["https://pypi.org/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), "https://pypi.org/simple");
+    }
+
+    #[test]
+    fn realign_pypi_mirror_does_not_replace_custom_lock_source() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://packages.example.com/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), before);
+    }
+
+    #[test]
+    fn realign_pypi_mirror_does_not_replace_project_configuration() {
+        let mut locs = locs_with_index("https://mirrors.ustc.edu.cn/pypi/simple/");
+        let mut project_index = locs.simple_indexes().next().unwrap().clone();
+        project_index.origin = Some(Origin::Project);
+        locs = IndexLocations::new(vec![project_index], Vec::new(), false);
+        let before = cli_url_str(&locs);
+        let lock_urls = vec!["https://pypi.org/simple".to_string()];
+        realign_pypi_mirror_to_lock(&mut locs, &lock_urls);
+        assert_eq!(cli_url_str(&locs), before);
+    }
 
     #[test]
     fn sanitize_accepts_normal_filenames() {
@@ -686,5 +1148,24 @@ mod tests {
     fn sanitize_rejects_nul_byte() {
         assert!(sanitize_artifact_filename("foo\0.whl").is_err());
         assert!(sanitize_artifact_filename("\0").is_err());
+    }
+
+    #[test]
+    fn is_pypi_default_accepts_trailing_slash() {
+        // Typical case — the built-in Pypi variant.
+        let index = IndexUrl::parse("https://pypi.org/simple", None).unwrap();
+        assert!(is_pypi_default(&index));
+        // The variant that previously escaped the matches! arm and was rewritten
+        // to https://pypi.org/packages/... (invalid).
+        let index = IndexUrl::parse("https://pypi.org/simple/", None).unwrap();
+        assert!(is_pypi_default(&index));
+    }
+
+    #[test]
+    fn is_pypi_default_rejects_mirrors() {
+        let index = IndexUrl::parse("https://mirrors.ustc.edu.cn/pypi/simple/", None).unwrap();
+        assert!(!is_pypi_default(&index));
+        let index = IndexUrl::parse("https://pypi.tuna.tsinghua.edu.cn/simple", None).unwrap();
+        assert!(!is_pypi_default(&index));
     }
 }
