@@ -286,6 +286,71 @@ fn download_basic_native_platform() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn download_reports_starting_downloads() -> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let context = uv_test::test_context_with_versions!(&["3.13"]);
+    let server = MockServer::start().await;
+
+    let wheel_bytes = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    let wheel_sha = {
+        let mut hasher = Sha256::new();
+        hasher.update(&wheel_bytes);
+        hex::encode(hasher.finalize())
+    };
+
+    let wheel_url = format!(
+        "{}/files/basic_package-0.1.0-py3-none-any.whl",
+        server.uri()
+    );
+
+    Mock::given(method("GET"))
+        .and(path("/files/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel_bytes))
+        .mount(&server)
+        .await;
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&format!(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["basic-package @ {wheel_url}#sha256={wheel_sha}"]
+        "#,
+    ))?;
+
+    let out = context.temp_dir.child("pkgs");
+    let mut filters = context.filters();
+    filters.push((r"(?m)^WARN Range requests not supported[^\n]*\n", ""));
+
+    uv_snapshot!(
+        filters,
+        context
+            .download()
+            .env_remove(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS)
+            .arg("-o")
+            .arg(out.path()),
+        @r"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+        Resolved 2 packages in [TIME]
+        Starting downloads...
+        Downloaded 1 package (0 already existed) to [TEMP_DIR]/pkgs
+        "
+    );
+
+    Ok(())
+}
+
 #[test]
 fn download_glibc_on_non_linux_errors() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);

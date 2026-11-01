@@ -7289,6 +7289,7 @@ dependencies = [
  "uv-client",
  "uv-command-support",
  "uv-configuration",
+ "uv-console",
  "uv-dispatch",
  "uv-distribution",
  "uv-distribution-types",

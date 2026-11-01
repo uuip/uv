@@ -11,6 +11,7 @@ pub mod audit;
 pub mod check;
 pub mod download;
 mod download_platform;
+mod download_reporter;
 mod edit;
 mod error;
 pub mod export;

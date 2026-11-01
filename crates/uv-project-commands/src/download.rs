@@ -49,6 +49,7 @@ use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use crate::download_platform::PlatformSpec;
+use crate::download_reporter::DownloadProjectReporter;
 
 /// Download the project's pinned dependencies as wheel or sdist files into `output_dir`.
 ///
@@ -314,6 +315,8 @@ pub async fn download(
     //     Downloads run in parallel, gated by `concurrency.downloads_semaphore` to mirror
     //     the rate-limiting behaviour of `uv sync`'s preparer. Local copy/link and skip
     //     arms run inline because they don't issue network requests.
+    let reporter = Arc::new(DownloadProjectReporter::new(printer));
+
     let mut report = DownloadReport::default();
     let root_name = project
         .workspace()
@@ -341,14 +344,18 @@ pub async fn download(
                 } else {
                     wheel.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Built(BuiltDist::DirectUrl(direct)) => {
                 let filename = sanitize_artifact_filename(&direct.filename.to_string())?.to_owned();
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Built(BuiltDist::Path(local)) => {
                 let dst = output_dir.join(local.filename.to_string());
@@ -370,7 +377,9 @@ pub async fn download(
                 } else {
                     source.file.hashes.to_vec()
                 };
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Source(SourceDist::DirectUrl(direct)) => {
                 let raw = direct
@@ -382,7 +391,9 @@ pub async fn download(
                 let dst = output_dir.join(&filename);
                 let url = (*direct.location).clone();
                 let expected: Vec<HashDigest> = hashes.to_vec();
-                spawn_download(&mut tasks, &client, &semaphore, url, dst, expected);
+                spawn_download(
+                    &mut tasks, &client, &semaphore, &reporter, filename, url, dst, expected,
+                );
             }
             Dist::Source(SourceDist::GitDirectory(git)) => {
                 warn_user!(
@@ -432,6 +443,8 @@ pub async fn download(
             }
         }
     }
+
+    reporter.on_complete();
 
     // 12. Print a summary. `already_existed` counts artifacts that were present
     // from a previous run and left untouched; dependencies that cannot be
@@ -492,16 +505,20 @@ impl DownloadReport {
 }
 
 /// Spawn a streaming download task onto `tasks`, gated by `semaphore`.
+#[expect(clippy::too_many_arguments)]
 fn spawn_download(
     tasks: &mut JoinSet<Result<MaterializeOutcome>>,
     client: &Arc<RegistryClient>,
     semaphore: &Arc<Semaphore>,
+    reporter: &Arc<DownloadProjectReporter>,
+    name: String,
     url: SafeUrl,
     dst: PathBuf,
     expected: Vec<HashDigest>,
 ) {
     let client = Arc::clone(client);
     let semaphore = Arc::clone(semaphore);
+    let reporter = Arc::clone(reporter);
     tasks.spawn(async move {
         // `concurrency.downloads_semaphore` is constructed once in `Concurrency::new`
         // and lives for the duration of the command; it is not expected to close.
@@ -520,7 +537,9 @@ fn spawn_download(
                 .map_err(|()| anyhow::anyhow!("invalid file path in artifact URL: {url}"))?;
             return copy_or_link(&path, &dst);
         }
-        let outcome = download_to(&client, url, &dst, &expected).await?;
+        let progress_id = reporter.on_download_start();
+        let outcome =
+            download_to(&client, &reporter, progress_id, name, url, &dst, &expected).await?;
         Ok(outcome)
     });
 }
@@ -557,6 +576,9 @@ impl Drop for PartialFile {
 /// async cancellation — and becomes a no-op once the file has been renamed.
 async fn download_to(
     client: &RegistryClient,
+    reporter: &DownloadProjectReporter,
+    progress_id: usize,
+    name: String,
     url: SafeUrl,
     dst: &Path,
     expected_hashes: &[HashDigest],
@@ -575,6 +597,11 @@ async fn download_to(
     if !status.is_success() {
         bail!("failed to fetch `{url}`: HTTP {status}");
     }
+
+    // Open the per-artifact progress bar once the server commits to a `Content-Length`
+    // (missing for chunked/compressed responses leaves a spinner).
+    let size = response.content_length();
+    reporter.on_download_response(progress_id, name, size);
 
     let mut hashers: Vec<Hasher> = expected_hashes
         .iter()
@@ -595,6 +622,7 @@ async fn download_to(
         file.write_all(&chunk).await.map_err(|err| {
             anyhow::anyhow!("failed to write `{}`: {err}", partial.path().display())
         })?;
+        reporter.on_download_progress(progress_id, chunk.len() as u64);
     }
 
     file.flush()
@@ -618,6 +646,8 @@ async fn download_to(
 
     fs_err::rename(partial.path(), dst)
         .map_err(|err| anyhow::anyhow!("failed to finalize `{}`: {err}", dst.display()))?;
+
+    reporter.on_download_complete(progress_id);
 
     Ok(MaterializeOutcome::Written)
 }
