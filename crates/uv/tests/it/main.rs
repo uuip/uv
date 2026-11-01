@@ -14,6 +14,9 @@ mod branching_urls;
 ))]
 mod ecosystem;
 
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod download;
+
 mod help;
 
 mod network;

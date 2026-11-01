@@ -975,6 +975,23 @@ pub enum ProjectCommand {
         after_long_help = ""
     )]
     Sync(SyncArgs),
+    /// Download the project's dependencies into a directory without installing them.
+    ///
+    /// Resolves `uv.lock` for the requested target platform and writes every wheel
+    /// (and any sdists referenced by the lockfile) into `--output-dir`.
+    ///
+    /// Does not create or modify a virtual environment. The current project and
+    /// virtual workspace roots are silently omitted; other workspace members,
+    /// local path, editable, and git dependencies are skipped with a warning.
+    #[command(
+        after_help = "\
+Example:
+  $ uv download --platform linux --machine aarch64 -o pkgs --default-index https://mirrors.ustc.edu.cn/pypi/simple/ -p 3.10
+
+Use `uv help download` for more details.",
+        after_long_help = ""
+    )]
+    Download(Box<DownloadArgs>),
     /// Update the project's lockfile.
     ///
     /// If the project lockfile (`uv.lock`) does not exist, it will be created. If a lockfile is
