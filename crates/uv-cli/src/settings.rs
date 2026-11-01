@@ -76,6 +76,9 @@ use crate::{
     },
 };
 
+mod download;
+pub use download::DownloadSettings;
+
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 
